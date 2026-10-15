@@ -1,0 +1,7 @@
+anthropic>=0.40.0
+httpx<1.0.0
+psycopg2-binary==2.9.9
+apscheduler==3.10.4
+python-dotenv==1.0.0
+yfinance>=0.2.50
+python-toon>=0.1.0

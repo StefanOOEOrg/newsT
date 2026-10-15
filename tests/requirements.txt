@@ -1,0 +1,26 @@
+# Test dependencies for News Trading System
+
+# Core testing framework
+pytest==7.4.3
+pytest-cov==4.1.0
+pytest-mock==3.12.0
+pytest-asyncio==0.21.1
+
+# Mocking and fixtures
+faker==20.1.0
+
+# Code quality
+flake8==6.1.0
+black==23.12.1
+mypy==1.7.1
+
+# Production dependencies needed for testing
+psycopg2-binary==2.9.9
+feedparser==6.0.10
+anthropic>=0.40.0
+httpx<1.0.0
+python-dotenv==1.0.0
+streamlit==1.29.0
+pandas==2.1.4
+plotly==5.18.0
+apscheduler==3.10.4

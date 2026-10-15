@@ -1,0 +1,42 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Run tests in Docker
+      run: |
+        chmod +x test-docker.sh
+        ./test-docker.sh
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install flake8 black
+
+    - name: Check code formatting with black
+      run: |
+        black --check collector/ analyzer/ tests/ --line-length=120 || true
+
+    - name: Lint with flake8
+      run: |
+        flake8 collector/ analyzer/ tests/ --max-line-length=120 --exclude=__pycache__,venv,env || true

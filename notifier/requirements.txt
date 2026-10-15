@@ -1,0 +1,5 @@
+psycopg2-binary==2.9.9
+python-dotenv==1.0.0
+apscheduler==3.10.4
+requests==2.31.0
+twilio==8.10.0

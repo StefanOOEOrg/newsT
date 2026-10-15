@@ -1,0 +1,87 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: newstrading_postgres
+    environment:
+      POSTGRES_USER: trading
+      POSTGRES_PASSWORD: trading123
+      POSTGRES_DB: newstrading
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trading"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  collector:
+    build:
+      context: .
+      dockerfile: collector/Dockerfile
+    container_name: newstrading_collector
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    restart: unless-stopped
+    volumes:
+      - ./collector:/app
+      - ./shared:/app/shared
+
+  analyzer:
+    build:
+      context: .
+      dockerfile: analyzer/Dockerfile
+    container_name: newstrading_analyzer
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    restart: unless-stopped
+    volumes:
+      - ./analyzer:/app
+      - ./shared:/app/shared
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    container_name: newstrading_dashboard
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    ports:
+      - "8501:8501"
+    restart: unless-stopped
+    volumes:
+      - ./dashboard:/app
+      - ./shared:/app/shared
+      - ./collector:/app/collector
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+
+  notifier:
+    build:
+      context: .
+      dockerfile: notifier/Dockerfile
+    container_name: newstrading_notifier
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    restart: unless-stopped
+    volumes:
+      - ./notifier:/app
+      - ./shared:/app/shared
+
+volumes:
+  postgres_data:
