@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The legacy tree is deleted in WP12. Until then its suite guards the
+  # reference implementation the port is checked against.
+  legacy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install test dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Tests (legacy tree)
+        run: python -m pytest tests/ -q
+
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.2
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - name: Install the package
+        run: uv sync --locked
+      - name: Lint
+        run: uv run ruff check src
+      - name: Format
+        run: uv run ruff format --check src
+      - name: Tests with coverage
+        run: uv run pytest src/tests -q --cov=newstrading --cov-report=term --cov-fail-under=80
+
+  ci-ok:
+    needs: [legacy, package]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail unless all jobs succeeded
+        run: |
+          echo "legacy: ${{ needs.legacy.result }} package: ${{ needs.package.result }}"
+          [ "${{ needs.legacy.result }}" = "success" ] && [ "${{ needs.package.result }}" = "success" ]

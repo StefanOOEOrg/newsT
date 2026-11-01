@@ -1,4 +1,4 @@
-.PHONY: help install install-test test test-verbose test-coverage test-unit test-integration clean lint format docker-up docker-down docker-logs
+.PHONY: help install install-test test test-legacy test-verbose test-coverage test-unit test-integration clean lint format docker-up docker-down docker-logs
 
 help:  ## Show this help message
 	@echo 'Usage: make [target]'
@@ -14,7 +14,10 @@ install:  ## Install production dependencies
 install-test:  ## Install test dependencies
 	pip install -r requirements-dev.txt
 
-test:  ## Run all tests in Docker
+test:  ## Run the package tests
+	uv run pytest src/tests
+
+test-legacy:  ## Run the legacy suite in Docker (removed in WP12)
 	./test-docker.sh
 
 test-verbose:  ## Run tests with verbose output in Docker
@@ -46,11 +49,11 @@ clean:  ## Clean up generated files
 	rm -rf .coverage
 	rm -rf .mypy_cache
 
-lint:  ## Run code linting
-	flake8 collector/ analyzer/ dashboard/ tests/ --max-line-length=120 --exclude=__pycache__,venv,env
+lint:  ## Run code linting (ruff, new package)
+	uv run ruff check src && uv run ruff format --check src
 
-format:  ## Format code with black
-	black collector/ analyzer/ dashboard/ tests/ --line-length=120
+format:  ## Format code with ruff
+	uv run ruff format src
 
 type-check:  ## Run type checking with mypy
 	mypy collector/ analyzer/ dashboard/ --ignore-missing-imports
