@@ -1,0 +1,16 @@
+# Test dependencies for newsT. One file for local runs, test-docker.sh and CI.
+# Runtime dependencies stay in <service>/requirements.txt.
+
+pytest==9.2.0
+pytest-mock==3.17.0
+pytest-cov==7.1.0
+
+psycopg2-binary==2.9.9
+feedparser==6.0.11
+anthropic==0.125.0
+httpx==0.28.1
+python-dotenv==1.0.0
+apscheduler==3.10.4
+python-toon==0.2.0
+pytz==2024.1
+requests==2.31.0
