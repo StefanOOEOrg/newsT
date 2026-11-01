@@ -126,8 +126,13 @@ class AIAnalyzer:
                         'special_events': []
                     }
 
-                # Prepend the prefilled text to the response (Claude continues from "sentiment:")
-                response_text = "sentiment:" + message.content[0].text
+                # Prepend the prefill only when the model continued the TOON object; a JSON reply
+                # (prefill ignored) must reach the JSON fallback unchanged.
+                raw_text = message.content[0].text
+                if raw_text.lstrip().startswith(("{", "```")):
+                    response_text = raw_text
+                else:
+                    response_text = "sentiment:" + raw_text
                 analysis = ResponseParser.parse_analysis_response(response_text, post)
 
                 return analysis

@@ -246,6 +246,7 @@ newsT/
 ├── .env.example                # Environment variables template
 ├── postgres/
 │   └── init.sql               # Database schema and sample data
+│   └── schema.sql            # Consolidated database schema (sourced by init.sql)
 ├── collector/
 │   ├── Dockerfile
 │   ├── requirements.txt
@@ -373,7 +374,7 @@ make check  # Run all checks (lint, type-check, test)
 # Setup (first time only)
 python3 -m venv venv
 source venv/bin/activate
-pip install -r tests/requirements.txt
+pip install -r requirements-dev.txt
 
 # Run tests
 pytest tests/test_collectors/ -v

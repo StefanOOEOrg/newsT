@@ -72,6 +72,33 @@ class TestAIAnalyzer:
         assert result['post_id'] == 123
         assert result['asset_id'] == 1
 
+    def test_analyze_post_toon_prefill_is_kept(self, analyzer, mock_anthropic_client):
+        """A TOON continuation must still receive the 'sentiment:' prefill prefix."""
+        mock_message = Mock()
+        mock_message.content = [Mock(text=(
+            ' positive\n'
+            'sentiment_score: 0.7\n'
+            'category: Hiring\n'
+            'key_topics[1]: hiring\n'
+            'summary: Test'
+        ))]
+        mock_anthropic_client.messages.create.return_value = mock_message
+
+        post = {
+            'id': 124,
+            'asset_id': 2,
+            'title': 'Test post',
+            'content': 'Test content',
+            'asset_name': 'TestCo',
+            'ticker': 'TEST'
+        }
+
+        result = analyzer.analyze_post(post)
+
+        assert result is not None
+        assert result['sentiment'] == 'positive'
+        assert result['key_topics'] == ['hiring']
+
     def test_analyze_post_api_error(self, analyzer, mock_anthropic_client):
         """Test handling of API errors."""
         mock_anthropic_client.messages.create.side_effect = Exception("API Error")

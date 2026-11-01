@@ -12,7 +12,7 @@ install:  ## Install production dependencies
 	pip install -r dashboard/requirements.txt
 
 install-test:  ## Install test dependencies
-	pip install -r tests/requirements.txt
+	pip install -r requirements-dev.txt
 
 test:  ## Run all tests in Docker
 	./test-docker.sh

@@ -50,7 +50,7 @@ done
 DOCKER_CMD="docker run --rm -v $(pwd):/app -w /app python:3.11-slim bash -c"
 
 # Build pytest command
-INSTALL_CMD="pip install -q pytest pytest-mock feedparser psycopg2-binary python-dotenv anthropic apscheduler"
+INSTALL_CMD="pip install -q -r requirements-dev.txt"
 if [ -n "$COVERAGE" ]; then
     INSTALL_CMD="$INSTALL_CMD pytest-cov"
 fi
