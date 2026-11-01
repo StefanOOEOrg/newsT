@@ -6,6 +6,7 @@ the one with braces in the template — a ``str.format`` implementation passes e
 case here and still breaks on the real default prompt.
 """
 
+import dataclasses
 import json
 
 import pytest
@@ -111,7 +112,7 @@ def test_content_is_cut_to_the_configured_length():
 
 
 def test_a_post_without_content_carries_no_content_key():
-    post = Post(**{**POST.__dict__, "content": None})
+    post = dataclasses.replace(POST, content=None)
 
     payload = PromptBuilder(lambda: "{text_to_analyze}").payload(post, ASSET)
 

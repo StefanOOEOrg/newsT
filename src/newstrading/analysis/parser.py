@@ -8,6 +8,7 @@ human reads). Everything else is normalised, because dropping a whole analysis o
 label costs more than mapping it.
 """
 
+import json
 from dataclasses import dataclass
 
 from newstrading.errors import NewsTradingError
@@ -26,6 +27,8 @@ CATEGORIES = (
 """Known values of ``category``. An unknown category becomes ``Other``."""
 
 _JSON_FENCE = "```"
+
+_EXCERPT_LENGTH = 80
 
 
 class AnalysisParseError(NewsTradingError):
@@ -90,7 +93,45 @@ def parse_analysis(text: str) -> Analysis:
         * ``summary`` must be a non-empty string after stripping; missing or empty
           raises.
     """
-    raise NotImplementedError
+    data = _json_object(text)
+
+    sentiment = data.get("sentiment")
+    if not isinstance(sentiment, str) or sentiment.strip().lower() not in SENTIMENTS:
+        raise AnalysisParseError(f"sentiment is not one of {sorted(SENTIMENTS)}: {sentiment!r}")
+
+    if "sentiment_score" not in data:
+        raise AnalysisParseError("sentiment_score is missing")
+
+    summary = data.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        raise AnalysisParseError("summary is missing or empty")
+
+    return Analysis(
+        sentiment=sentiment.strip().lower(),
+        sentiment_score=_score(data["sentiment_score"]),
+        category=_category(data.get("category")),
+        key_topics=_topics(data.get("key_topics"), "key_topics"),
+        summary=summary.strip(),
+        special_events=_topics(data.get("special_events"), "special_events"),
+    )
+
+
+def _category(value: object) -> str:
+    """Match ``value`` against :data:`CATEGORIES`, case-insensitively.
+
+    Args:
+        value: The raw ``category`` field, any type.
+
+    Returns:
+        The matching entry of :data:`CATEGORIES`, or ``Other`` for anything unknown.
+    """
+    if not isinstance(value, str):
+        return "Other"
+    wanted = value.strip().lower()
+    for category in CATEGORIES:
+        if category.lower() == wanted:
+            return category
+    return "Other"
 
 
 def _json_object(text: str) -> dict:
@@ -113,7 +154,50 @@ def _json_object(text: str) -> dict:
           followed by prose must still parse, and the prose must be ignored.
         * Error messages carry at most the first 80 characters of the cleaned text.
     """
-    raise NotImplementedError
+    cleaned = _unfence(text)
+    start = cleaned.find("{")
+    if start == -1:
+        raise AnalysisParseError(f"no JSON object in the answer: {_excerpt(cleaned)}")
+    try:
+        decoded, _end = json.JSONDecoder().raw_decode(cleaned[start:])
+    except ValueError as error:
+        raise AnalysisParseError(
+            f"cannot decode the JSON object in the answer: {_excerpt(cleaned)}"
+        ) from error
+    if not isinstance(decoded, dict):
+        raise AnalysisParseError(f"the answer does not hold a JSON object: {_excerpt(cleaned)}")
+    return decoded
+
+
+def _unfence(text: str) -> str:
+    """Strip a leading fence with an optional language tag and a trailing fence.
+
+    Args:
+        text: Raw answer that may be wrapped in a ``` fence.
+
+    Returns:
+        The text without its fence lines.
+    """
+    cleaned = text.strip()
+    if cleaned.startswith(_JSON_FENCE):
+        cleaned = cleaned[len(_JSON_FENCE) :].lstrip()
+        if not cleaned.startswith("{") and "\n" in cleaned:
+            cleaned = cleaned.split("\n", 1)[1]
+    if cleaned.rstrip().endswith(_JSON_FENCE):
+        cleaned = cleaned.rstrip()[: -len(_JSON_FENCE)]
+    return cleaned.strip()
+
+
+def _excerpt(text: str) -> str:
+    """Return at most the first :data:`_EXCERPT_LENGTH` characters of ``text``.
+
+    Args:
+        text: The cleaned model answer.
+
+    Returns:
+        The short excerpt used in error messages.
+    """
+    return text[:_EXCERPT_LENGTH]
 
 
 def _topics(value: object, field: str) -> tuple[str, ...]:
@@ -130,7 +214,29 @@ def _topics(value: object, field: str) -> tuple[str, ...]:
         AnalysisParseError: If ``value`` is a JSON-array string that does not decode, or
             a type that is neither string nor list.
     """
-    raise NotImplementedError
+    if value is None:
+        return ()
+    if isinstance(value, str) and value.strip().startswith("["):
+        try:
+            decoded = json.loads(value)
+        except ValueError as error:
+            raise AnalysisParseError(
+                f"{field} is not a valid JSON array: {_excerpt(value)}"
+            ) from error
+        items = decoded if isinstance(decoded, list) else [decoded]
+    elif isinstance(value, str):
+        items = value.split(",")
+    elif isinstance(value, list):
+        items = value
+    else:
+        raise AnalysisParseError(f"{field} must be a list or a string, got {type(value).__name__}")
+
+    topics = []
+    for item in items:
+        entry = str(item).strip()
+        if entry:
+            topics.append(entry)
+    return tuple(topics)
 
 
 def _score(value: object) -> float:
@@ -146,4 +252,10 @@ def _score(value: object) -> float:
     Raises:
         AnalysisParseError: If ``value`` is missing, a boolean, or not numeric.
     """
-    raise NotImplementedError
+    if isinstance(value, bool):
+        raise AnalysisParseError(f"sentiment_score must be a number, got {value!r}")
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError) as error:
+        raise AnalysisParseError(f"sentiment_score must be a number, got {value!r}") from error
+    return min(1.0, max(-1.0, number))

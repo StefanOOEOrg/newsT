@@ -7,13 +7,15 @@ carries braces of its own, and ``format`` would read them as missing keys and ra
 ``KeyError``.
 """
 
+import json
 from collections.abc import Callable
+from typing import Any
 
 import psycopg2
 
 from newstrading.collectors.models import Asset, Post
 from newstrading.config import Settings
-from newstrading.db import Connector
+from newstrading.db import Connector, connection
 
 ASSET_NAME_PLACEHOLDER = "{asset_name}"
 TICKER_PLACEHOLDER = "{ticker}"
@@ -37,6 +39,8 @@ Answer with a single JSON object and nothing else:
 Bullish (long): hiring, partnerships, product launches, earnings beats, growth, positive guidance.
 Bearish (short): problems, layoffs, negative coverage, downgrades, missed earnings, legal issues."""
 """Fallback template used when the database holds none."""
+
+_SETTINGS_QUERY = "SELECT analysis_prompt FROM notification_settings WHERE id = 1"
 
 
 class PromptBuilder:
@@ -63,7 +67,9 @@ class PromptBuilder:
             content_max_length: Characters of ``post.content`` that reach the model;
                 pass :attr:`Settings.content_max_length` in production.
         """
-        raise NotImplementedError
+        self.template_loader = template_loader or (lambda: DEFAULT_PROMPT_TEMPLATE)
+        self.content_max_length = content_max_length
+        self._cached_template: str | None = None
 
     @property
     def template(self) -> str:
@@ -77,7 +83,9 @@ class PromptBuilder:
               :meth:`build` calls — one prompt per post must not mean one query per post.
             * The loaded text is cached as is, empty string included.
         """
-        raise NotImplementedError
+        if self._cached_template is None:
+            self._cached_template = self.template_loader()
+        return self._cached_template
 
     def reload(self) -> None:
         """Drop the cached template so the next :meth:`template` loads it again.
@@ -86,7 +94,7 @@ class PromptBuilder:
             * Never calls the loader itself.
             * Safe on a builder that has not loaded yet.
         """
-        raise NotImplementedError
+        self._cached_template = None
 
     def build(self, post: Post, asset: Asset) -> str:
         """Fill the template for ``post`` and its ``asset``.
@@ -105,7 +113,10 @@ class PromptBuilder:
             * ``{text_to_analyze}`` is filled with :meth:`payload`.
             * A placeholder that does not occur in the template is not an error.
         """
-        raise NotImplementedError
+        prompt = self.template
+        prompt = prompt.replace(ASSET_NAME_PLACEHOLDER, asset.name)
+        prompt = prompt.replace(TICKER_PLACEHOLDER, asset.ticker)
+        return prompt.replace(POST_PLACEHOLDER, self.payload(post, asset))
 
     def payload(self, post: Post, asset: Asset) -> str:
         """Render the post as the JSON block that goes into the prompt.
@@ -127,7 +138,14 @@ class PromptBuilder:
               literal ``"None"`` must never reach the model.
             * Non-ASCII text is kept as is (``ensure_ascii=False``).
         """
-        raise NotImplementedError
+        data = {
+            "title": post.title,
+            "asset_name": asset.name,
+            "ticker": asset.ticker,
+        }
+        if post.content:
+            data["content"] = post.content[: self.content_max_length]
+        return json.dumps(data, ensure_ascii=False)
 
 
 def database_prompt_loader(
@@ -152,4 +170,15 @@ def database_prompt_loader(
           configured a prompt, and silently sending an empty prompt would be worse.
         * The returned text is used verbatim, not stripped.
     """
-    raise NotImplementedError
+
+    def load() -> str:
+        with connection(settings, connector=connector) as db_connection:
+            conn: Any = db_connection
+            with conn.cursor() as cursor:
+                cursor.execute(_SETTINGS_QUERY)
+                row = cursor.fetchone()
+        if not row or row[0] is None or not str(row[0]).strip():
+            return DEFAULT_PROMPT_TEMPLATE
+        return row[0]
+
+    return load
