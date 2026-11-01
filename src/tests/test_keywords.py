@@ -116,6 +116,24 @@ def test_record_without_keywords_opens_no_connection():
     assert calls == []
 
 
+def test_upsert_increments_the_counter_instead_of_resetting_it():
+    """A later hit adds to ``posts_found``; the insert value stays a constant 1.
+
+    The statement is checked instead of the database — the suite runs without
+    Postgres. Without this assertion the insert value and the update value can be
+    swapped and every other test stays green.
+    """
+    fake = FakeConnection()
+
+    KeywordTracker(SETTINGS, connector=connector(fake)).record_keyword_hit(7, ["genpact"])
+
+    query = " ".join(fake.statements[0][0].split()).lower()
+    assert "on conflict (asset_id, keyword)" in query
+    update = query.split("do update set", 1)[1]
+    assert "posts_found = keyword_performance.posts_found + 1" in update
+    assert "last_found_at = now()" in update
+
+
 def test_record_swallows_database_errors():
     """Statistics are best effort: rollback, no exception."""
     fake = FakeConnection(fail_with=psycopg2.OperationalError("table is gone"))
