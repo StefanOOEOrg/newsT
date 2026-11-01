@@ -12,6 +12,10 @@
 --   5. System Infrastructure Tables
 --   6. Indexes
 --   7. Sample Data
+--   8. Events
+--   9. Market Data
+--  10. Rate Limiting
+--  11. Collector Statistics
 -- ==============================================================================
 
 -- ==============================================================================
@@ -138,6 +142,62 @@ CREATE TABLE alerts (
 COMMENT ON TABLE alerts IS 'Trading alerts generated from social media analysis (bullish/bearish signals)';
 COMMENT ON COLUMN alerts.severity IS 'Alert severity: low, medium, high, critical';
 COMMENT ON COLUMN alerts.notified IS 'Whether notification has been sent for this alert';
+
+-- Alert performance table: Tracks stock price movements after alerts for backtesting
+-- (from migration 007_add_alert_performance; lives here because it references alerts(id))
+CREATE TABLE IF NOT EXISTS alert_performance (
+    id SERIAL PRIMARY KEY,
+    alert_id INTEGER REFERENCES alerts(id) ON DELETE CASCADE,
+    asset_id INTEGER REFERENCES asset(id) ON DELETE CASCADE,
+    alert_type VARCHAR(50) NOT NULL,
+    alert_date TIMESTAMP NOT NULL,
+    confidence_score DECIMAL(5,2),
+
+    -- Price data at alert time
+    price_at_alert DECIMAL(10,2),
+
+    -- Price data at future intervals
+    price_1d_later DECIMAL(10,2),
+    price_3d_later DECIMAL(10,2),
+    price_7d_later DECIMAL(10,2),
+    price_14d_later DECIMAL(10,2),
+    price_30d_later DECIMAL(10,2),
+
+    -- Return calculations
+    return_1d DECIMAL(10,4),
+    return_3d DECIMAL(10,4),
+    return_7d DECIMAL(10,4),
+    return_14d DECIMAL(10,4),
+    return_30d DECIMAL(10,4),
+
+    -- Directional analysis
+    predicted_direction VARCHAR(10), -- 'bullish', 'bearish', 'neutral'
+    actual_direction_1d VARCHAR(10),
+    actual_direction_3d VARCHAR(10),
+    actual_direction_7d VARCHAR(10),
+
+    -- Accuracy tracking
+    correct_1d BOOLEAN,
+    correct_3d BOOLEAN,
+    correct_7d BOOLEAN,
+
+    -- Tracking metadata
+    last_updated TIMESTAMP DEFAULT NOW(),
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Indexes for performance
+CREATE INDEX idx_alert_performance_alert_id ON alert_performance(alert_id);
+CREATE INDEX idx_alert_performance_asset_id ON alert_performance(asset_id);
+CREATE INDEX idx_alert_performance_alert_type ON alert_performance(alert_type);
+CREATE INDEX idx_alert_performance_alert_date ON alert_performance(alert_date);
+CREATE INDEX idx_alert_performance_confidence ON alert_performance(confidence_score);
+
+-- Comments
+COMMENT ON TABLE alert_performance IS 'Tracks stock price movements after alerts for backtesting and validation';
+COMMENT ON COLUMN alert_performance.predicted_direction IS 'Direction predicted by alert: bullish (long), bearish (short), neutral';
+COMMENT ON COLUMN alert_performance.return_1d IS 'Price return 1 day after alert as decimal (e.g., 0.05 = 5%)';
+COMMENT ON COLUMN alert_performance.correct_1d IS 'True if predicted direction matches actual price movement';
 
 -- ==============================================================================
 -- SECTION 4: NOTIFICATION SYSTEM TABLES
@@ -321,6 +381,271 @@ Focus on identifying trading signals:
 - BEARISH (short signals): problems, layoffs, negative sentiment, downgrades, missed earnings, legal issues, regulatory risks, guidance cuts, insider selling, customer losses
 
 Return ONLY valid JSON, no other text.');
+
+-- ==============================================================================
+-- SECTION 8: EVENTS
+-- ==============================================================================
+
+-- Asset events table: Financial calendar events for tracked assets
+-- (from migration 007_add_asset_events)
+CREATE TABLE IF NOT EXISTS asset_events (
+    id SERIAL PRIMARY KEY,
+    asset_id INTEGER NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
+    event_type VARCHAR(50) NOT NULL,  -- 'earnings', 'product_launch', 'filing', 'conference', 'dividend', etc.
+    event_date DATE NOT NULL,
+    event_time TIME,  -- Optional: For intraday events
+    description TEXT,
+    url TEXT,
+    source VARCHAR(100),  -- 'alphavantage', 'yahoo', 'sec_edgar', 'manual'
+    metadata JSONB,  -- Additional event-specific data
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Indexes for efficient queries
+CREATE INDEX IF NOT EXISTS idx_asset_events_asset_id ON asset_events(asset_id);
+CREATE INDEX IF NOT EXISTS idx_asset_events_event_date ON asset_events(event_date);
+CREATE INDEX IF NOT EXISTS idx_asset_events_event_type ON asset_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_asset_events_upcoming ON asset_events(event_date DESC);
+
+-- Composite index for common queries (upcoming events for specific asset)
+CREATE INDEX IF NOT EXISTS idx_asset_events_asset_upcoming ON asset_events(asset_id, event_date DESC);
+
+COMMENT ON TABLE asset_events IS 'Financial calendar events for tracked assets';
+COMMENT ON COLUMN asset_events.event_type IS 'Type of event: earnings, product_launch, filing, conference, dividend, etc.';
+COMMENT ON COLUMN asset_events.metadata IS 'JSON field for additional event-specific data (e.g., EPS estimates, filing type)';
+
+-- ==============================================================================
+-- SECTION 9: MARKET DATA
+-- ==============================================================================
+
+-- Stock prices table: Historical stock price data collected via yfinance
+-- Single source of truth for price data used by dashboard and analyzer
+-- (from migration 009_add_stock_prices)
+CREATE TABLE IF NOT EXISTS stock_prices (
+    id SERIAL PRIMARY KEY,
+    asset_id INTEGER NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
+    timestamp TIMESTAMP NOT NULL,
+    open DECIMAL(12, 4),
+    high DECIMAL(12, 4),
+    low DECIMAL(12, 4),
+    close DECIMAL(12, 4) NOT NULL,
+    volume BIGINT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(asset_id, timestamp)
+);
+
+-- Indexes for fast queries
+CREATE INDEX IF NOT EXISTS idx_stock_prices_asset_timestamp
+    ON stock_prices(asset_id, timestamp DESC);
+
+CREATE INDEX IF NOT EXISTS idx_stock_prices_timestamp
+    ON stock_prices(timestamp DESC);
+
+COMMENT ON TABLE stock_prices IS 'Historical stock price data collected via yfinance. Single source of truth for price data used across services.';
+
+-- ==============================================================================
+-- SECTION 10: RATE LIMITING
+-- ==============================================================================
+
+-- API usage tracking table
+-- (from migration 008_add_api_rate_limiting)
+CREATE TABLE IF NOT EXISTS api_usage (
+    id SERIAL PRIMARY KEY,
+    collector_name VARCHAR(100) NOT NULL,
+    api_endpoint VARCHAR(255),
+    timestamp TIMESTAMP DEFAULT NOW(),
+    status_code INTEGER,
+    success BOOLEAN DEFAULT TRUE,
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Index for efficient queries
+CREATE INDEX IF NOT EXISTS idx_api_usage_collector_time
+    ON api_usage(collector_name, timestamp DESC);
+
+-- Rate limit configuration table
+CREATE TABLE IF NOT EXISTS rate_limit_config (
+    id SERIAL PRIMARY KEY,
+    collector_name VARCHAR(100) UNIQUE NOT NULL,
+    max_calls_per_day INTEGER DEFAULT 100,
+    max_calls_per_hour INTEGER,
+    max_calls_per_minute INTEGER,
+    min_interval_seconds INTEGER DEFAULT 1,
+    enabled BOOLEAN DEFAULT TRUE,
+    last_reset TIMESTAMP DEFAULT NOW(),
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Insert default rate limit configurations
+INSERT INTO rate_limit_config (collector_name, max_calls_per_day, max_calls_per_hour, max_calls_per_minute, min_interval_seconds, notes)
+VALUES
+    ('NewsAPICollector', 100, NULL, NULL, 1, 'Free tier: 100 requests/day'),
+    ('FinnhubCollector', NULL, NULL, 60, 1, 'Free tier: 60 calls/minute'),
+    ('AlphaVantageCollector', 25, 5, NULL, 12, 'Free tier: 25 calls/day, 5 per minute recommended'),
+    ('RSSCollector', NULL, NULL, NULL, 10, 'No hard limit, but respect servers'),
+    ('CongressionalTradesCollector', NULL, NULL, NULL, 60, 'No hard limit, fetch once per minute')
+ON CONFLICT (collector_name) DO NOTHING;
+
+-- Rate limiting configuration for StockPriceCollector
+-- (from migration 009_add_stock_prices; kept with the other rate limit rows so the table exists first)
+INSERT INTO rate_limit_config (
+    collector_name,
+    max_calls_per_day,
+    max_calls_per_hour,
+    max_calls_per_minute,
+    min_interval_seconds,
+    enabled,
+    notes
+) VALUES (
+    'StockPriceCollector',
+    NULL,  -- No daily limit (yfinance free tier is generous)
+    100,   -- Max 100 calls per hour (well below yfinance limit)
+    NULL,  -- No per-minute limit
+    300,   -- Minimum 300 seconds (5 minutes) between calls - matches collection interval
+    true,
+    'Fetches stock prices from Yahoo Finance. Updates every 5 minutes during market hours.'
+) ON CONFLICT (collector_name) DO NOTHING;
+
+-- View for API usage stats
+CREATE OR REPLACE VIEW api_usage_stats AS
+SELECT
+    collector_name,
+    COUNT(*) FILTER (WHERE timestamp >= NOW() - INTERVAL '1 day') as calls_today,
+    COUNT(*) FILTER (WHERE timestamp >= NOW() - INTERVAL '1 hour') as calls_last_hour,
+    COUNT(*) FILTER (WHERE timestamp >= NOW() - INTERVAL '1 minute') as calls_last_minute,
+    COUNT(*) FILTER (WHERE success = FALSE AND timestamp >= NOW() - INTERVAL '1 day') as errors_today,
+    MAX(timestamp) as last_call_time
+FROM api_usage
+GROUP BY collector_name;
+
+-- Function to check if rate limit is exceeded
+CREATE OR REPLACE FUNCTION check_rate_limit(p_collector_name VARCHAR)
+RETURNS TABLE(
+    can_proceed BOOLEAN,
+    reason TEXT,
+    wait_seconds INTEGER
+) AS $$
+DECLARE
+    v_config RECORD;
+    v_calls_today INTEGER;
+    v_calls_hour INTEGER;
+    v_calls_minute INTEGER;
+    v_last_call TIMESTAMP;
+    v_min_interval INTEGER;
+BEGIN
+    -- Get rate limit config
+    SELECT * INTO v_config
+    FROM rate_limit_config
+    WHERE collector_name = p_collector_name;
+
+    IF NOT FOUND OR NOT v_config.enabled THEN
+        RETURN QUERY SELECT TRUE, 'No rate limit configured'::TEXT, 0;
+        RETURN;
+    END IF;
+
+    -- Get current usage
+    SELECT
+        COALESCE(calls_today, 0),
+        COALESCE(calls_last_hour, 0),
+        COALESCE(calls_last_minute, 0),
+        last_call_time
+    INTO v_calls_today, v_calls_hour, v_calls_minute, v_last_call
+    FROM api_usage_stats
+    WHERE collector_name = p_collector_name;
+
+    -- Check daily limit
+    IF v_config.max_calls_per_day IS NOT NULL AND v_calls_today >= v_config.max_calls_per_day THEN
+        RETURN QUERY SELECT
+            FALSE,
+            format('Daily limit exceeded (%s/%s)', v_calls_today, v_config.max_calls_per_day)::TEXT,
+            EXTRACT(EPOCH FROM (DATE_TRUNC('day', NOW()) + INTERVAL '1 day' - NOW()))::INTEGER;
+        RETURN;
+    END IF;
+
+    -- Check hourly limit
+    IF v_config.max_calls_per_hour IS NOT NULL AND v_calls_hour >= v_config.max_calls_per_hour THEN
+        RETURN QUERY SELECT
+            FALSE,
+            format('Hourly limit exceeded (%s/%s)', v_calls_hour, v_config.max_calls_per_hour)::TEXT,
+            EXTRACT(EPOCH FROM (DATE_TRUNC('hour', NOW()) + INTERVAL '1 hour' - NOW()))::INTEGER;
+        RETURN;
+    END IF;
+
+    -- Check per-minute limit
+    IF v_config.max_calls_per_minute IS NOT NULL AND v_calls_minute >= v_config.max_calls_per_minute THEN
+        RETURN QUERY SELECT
+            FALSE,
+            format('Per-minute limit exceeded (%s/%s)', v_calls_minute, v_config.max_calls_per_minute)::TEXT,
+            60;
+        RETURN;
+    END IF;
+
+    -- Check minimum interval
+    IF v_config.min_interval_seconds IS NOT NULL AND v_last_call IS NOT NULL THEN
+        IF NOW() - v_last_call < (v_config.min_interval_seconds || ' seconds')::INTERVAL THEN
+            RETURN QUERY SELECT
+                FALSE,
+                format('Minimum interval not met (wait %s seconds)', v_config.min_interval_seconds)::TEXT,
+                v_config.min_interval_seconds;
+            RETURN;
+        END IF;
+    END IF;
+
+    -- All checks passed
+    RETURN QUERY SELECT TRUE, 'OK'::TEXT, 0;
+END;
+$$ LANGUAGE plpgsql;
+
+COMMENT ON TABLE api_usage IS 'Tracks all API calls made by collectors for rate limiting';
+COMMENT ON TABLE rate_limit_config IS 'Configuration for rate limits per collector';
+COMMENT ON FUNCTION check_rate_limit IS 'Checks if a collector can make an API call without exceeding rate limits';
+
+-- ==============================================================================
+-- SECTION 11: COLLECTOR STATISTICS
+-- ==============================================================================
+
+-- Collector statistics table: Runtime statistics for each collector service
+-- (from migration 011_add_collector_statistics)
+CREATE TABLE IF NOT EXISTS collector_statistics (
+    id SERIAL PRIMARY KEY,
+    collector_name VARCHAR(100) UNIQUE NOT NULL,
+    last_run_started_at TIMESTAMP WITH TIME ZONE,
+    last_run_completed_at TIMESTAMP WITH TIME ZONE,
+    last_run_duration_seconds NUMERIC(10, 2),
+    total_posts_collected INTEGER DEFAULT 0,
+    total_posts_saved INTEGER DEFAULT 0,
+    last_run_posts_collected INTEGER DEFAULT 0,
+    last_run_posts_saved INTEGER DEFAULT 0,
+    total_errors INTEGER DEFAULT 0,
+    last_error_message TEXT,
+    last_error_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Create index on collector_name for faster lookups
+CREATE INDEX IF NOT EXISTS idx_collector_statistics_name ON collector_statistics(collector_name);
+
+-- Create index on last_run_completed_at for sorting
+CREATE INDEX IF NOT EXISTS idx_collector_statistics_last_run ON collector_statistics(last_run_completed_at DESC);
+
+-- Add comment to table
+COMMENT ON TABLE collector_statistics IS 'Runtime statistics for data collector services';
+COMMENT ON COLUMN collector_statistics.collector_name IS 'Unique name of the collector (e.g., RSSCollector, NewsAPICollector)';
+COMMENT ON COLUMN collector_statistics.last_run_started_at IS 'When the last collection run started';
+COMMENT ON COLUMN collector_statistics.last_run_completed_at IS 'When the last collection run completed successfully';
+COMMENT ON COLUMN collector_statistics.last_run_duration_seconds IS 'Duration of last run in seconds';
+COMMENT ON COLUMN collector_statistics.total_posts_collected IS 'Total posts collected across all runs';
+COMMENT ON COLUMN collector_statistics.total_posts_saved IS 'Total new posts saved across all runs';
+COMMENT ON COLUMN collector_statistics.last_run_posts_collected IS 'Posts collected in the most recent run';
+COMMENT ON COLUMN collector_statistics.last_run_posts_saved IS 'New posts saved in the most recent run';
+COMMENT ON COLUMN collector_statistics.total_errors IS 'Total errors encountered across all runs';
+COMMENT ON COLUMN collector_statistics.last_error_message IS 'Message from most recent error (max 500 chars)';
+COMMENT ON COLUMN collector_statistics.last_error_at IS 'When the last error occurred';
 
 -- ==============================================================================
 -- END OF SCHEMA
