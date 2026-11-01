@@ -77,6 +77,7 @@ def connect(database_url: str, *, connector: Connector = psycopg2.connect) -> Co
     """
     try:
         return connector(database_url)
+    # boundary: any driver failure becomes a DatabaseError
     except Exception as error:
         raise DatabaseError(
             f"cannot open a connection to {_describe_target(database_url)}"
