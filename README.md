@@ -244,9 +244,8 @@ The collector will automatically reload settings and adjust its schedule on the 
 newsT/
 ├── docker-compose.yml          # Docker services configuration
 ├── .env.example                # Environment variables template
-├── postgres/
-│   └── init.sql               # Database schema and sample data
-│   └── schema.sql            # Consolidated database schema (sourced by init.sql)
+├── sql/
+│   └── schema.sql            # Database schema and sample data (mounted by docker compose)
 ├── collector/
 │   ├── Dockerfile
 │   ├── requirements.txt
