@@ -3,8 +3,8 @@
 The analyzer sits between ``social_posts`` and the model, so every case here drives a
 fake connection, a fake completion and a fake prompt builder: no database, no socket,
 no model. The expected values are the legacy ones — the select, the retry delays
-``2, 4, 8`` and the neutral fallback for an empty answer come from
-``analyzer/main.py``; the parsing comes from :mod:`newstrading.analysis.parser`.
+``2, 4`` between the three attempts and the neutral fallback for an empty answer come
+from ``analyzer/main.py``; the parsing comes from :mod:`newstrading.analysis.parser`.
 """
 
 from datetime import datetime
@@ -334,7 +334,7 @@ def test_a_retryable_error_is_retried_three_times_with_the_legacy_delays(make_er
 
     assert stored == 0
     assert len(model.prompts) == 3
-    assert sleep.calls == [2, 4, 8]
+    assert sleep.calls == [2, 4]
     assert connection.inserted == []
 
 
@@ -381,6 +381,23 @@ def test_one_failing_post_does_not_stop_the_batch_and_is_not_counted():
     assert stored == 1
     assert [row[0] for row in connection.inserted] == [2]
     assert connection.commits == 1
+
+
+def test_a_non_retryable_model_error_skips_only_its_post():
+    connection = FakeConnection(
+        [
+            post_row(row_id=1, source_post_id="p-1"),
+            post_row(row_id=2, source_post_id="p-2"),
+        ]
+    )
+    analyzer = make_analyzer(connection, FakeModel(ValueError("bad request"), ANSWER))
+
+    stored = analyzer.analyze_pending()
+
+    assert stored == 1
+    assert [row[0] for row in connection.inserted] == [2]
+    assert connection.commits == 1
+    assert connection.rollbacks == 0
 
 
 # --- failure handling ---------------------------------------------------------------

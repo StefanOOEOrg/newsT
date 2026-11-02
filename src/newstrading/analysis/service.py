@@ -242,17 +242,34 @@ class Analyzer:
             try:
                 return self._complete(prompt)
             except RETRYABLE_ERRORS as error:
-                logger.warning(
-                    "retryable model error for post %s (attempt %d/%d): %s: %s; waiting %ss",
+                if attempt < len(RETRY_DELAYS):
+                    logger.warning(
+                        "retryable model error for post %s (attempt %d/%d): %s: %s; waiting %ss",
+                        post_id,
+                        attempt,
+                        len(RETRY_DELAYS),
+                        type(error).__name__,
+                        error,
+                        delay,
+                    )
+                    self._sleep(delay)
+                else:
+                    logger.error(
+                        "model call for post %s failed after %d attempts: %s: %s",
+                        post_id,
+                        len(RETRY_DELAYS),
+                        type(error).__name__,
+                        error,
+                    )
+            # boundary: any other model failure skips only this post, the batch survives
+            except Exception as error:
+                logger.error(
+                    "model call for post %s failed: %s: %s",
                     post_id,
-                    attempt,
-                    len(RETRY_DELAYS),
                     type(error).__name__,
                     error,
-                    delay,
                 )
-                self._sleep(delay)
-        logger.error("model call for post %s failed after %d attempts", post_id, len(RETRY_DELAYS))
+                return None
         return None
 
     def _store(self, db: Any, post_id: int, analysis: Analysis) -> None:
