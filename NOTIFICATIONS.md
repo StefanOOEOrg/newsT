@@ -1,434 +1,144 @@
-# Alert Notification System
+# Alert notifications
 
-Get instantly notified when high-confidence trading alerts are generated.
+`newstrading notify` turns the alerts of the analysis pass into messages. The code lives in
+`src/newstrading/notify/`; everything it needs is read from PostgreSQL, not from the environment.
+This guide describes that configuration and the delivery rules the code implements.
 
-## Features
+## What a notification pass does
 
-- **Multiple Channels**: Email, SMS (Twilio), Push (Pushover), Webhook
-- **Configurable Thresholds**: Set minimum confidence levels per alert type
-- **Quiet Hours**: No notifications during sleep hours (default: 22:00-07:00)
-- **Per-Alert Customization**: Different settings for Hiring, Negative Sentiment, and Problem alerts
-- **Real-time Delivery**: Notifications sent within 1-5 minutes of alert generation
+1. Read the single settings row (`notification_settings`, `id = 1`). Without it the pass logs one
+   warning and handles nothing.
+2. Select the alerts with `notified = FALSE`, newest first, at most 100 per run.
+3. For every alert read its preference row, check `enabled`, check `min_confidence`, check the
+   quiet-hours window, then send over the channels the preference lists.
+4. Write one `notification_log` row per attempted channel and commit the pass once at the end.
 
-## Quick Setup
+An alert is marked notified (`notified = TRUE`, `notified_at = NOW()`) after at least one successful
+send. Without a matching active preference, or with a preference whose `min_confidence` the alert
+does not reach, it is consumed without a send. A broken channel never raises out of the pass: the
+remaining channels of the same alert still run.
 
-### 1. Configure Email Notifications (Recommended)
+## The four senders
 
-The easiest way to get started is with email notifications using Gmail:
+| Channel | Sender | Sends | Recipient written to the log |
+|---|---|---|---|
+| `email` | `EmailSender` | multipart HTML mail per alert | `notification_email` |
+| `sms` | `SmsSender` | one text message over the provider HTTP API | `notification_phone` |
+| `push` | `PushSender` | one push notification, elevated priority at confidence 0.9 or higher | `pushover_user` |
+| `webhook` | `WebhookSender` | `POST` with the alert as JSON | the URL |
 
-1. Go to **Dashboard → Settings → Notification Settings**
+The email sender needs `notification_email`, `smtp_user` and `smtp_password`. `smtp_host` falls back
+to `smtp.gmail.com`, `smtp_port` to `587`, and `smtp_from` to `smtp_user`. The subject of the message
+is `Alert: <asset> (<ticker>) - <alert type>`.
 
-2. Enter your email configuration:
-   - **Email Address**: Your email where you want to receive alerts
-   - **SMTP Username**: Your Gmail address (e.g., your.email@gmail.com)
-   - **SMTP Password**: Your Gmail App Password (see below)
+The SMS sender needs `twilio_account_sid`, `twilio_auth_token`, `twilio_from_number` and
+`notification_phone`; the body carries the asset, the alert type, the confidence and the first 100
+characters of the description.
 
-3. Configure alert preferences:
-   - **Hiring Signal**: Min confidence 0.85, Email enabled
-   - **Negative Sentiment**: Min confidence 0.85, Email enabled
-   - **Problem Detected**: Min confidence 0.80, Email enabled
+The push sender needs `pushover_token` and `pushover_user`.
 
-4. Set quiet hours (default 22:00-07:00)
+The webhook sender needs `webhook_url` and accepts `200`, `201` and `204`. Its JSON body has the
+keys `alert_id`, `asset_name`, `ticker`, `alert_type`, `description`, `confidence_score` and
+`timestamp` (ISO 8601).
 
-5. Click "Save Notification Settings"
+## Configuration: the `notification_settings` row
 
-6. Restart the notifier service:
-   ```bash
-   docker-compose restart notifier
-   ```
+The senders read exactly these columns of the single row `notification_settings.id = 1`:
 
-### Gmail App Password Setup
+| Column | Used by | Meaning |
+|---|---|---|
+| `notification_email` | email | recipient address |
+| `smtp_host` | email | host, default `smtp.gmail.com` |
+| `smtp_port` | email | port, default `587` |
+| `smtp_user` | email | login and default sender |
+| `smtp_password` | email | password or app password |
+| `smtp_from` | email | sender address, falls back to `smtp_user` |
+| `notification_phone` | sms | recipient number |
+| `twilio_account_sid` | sms | account SID |
+| `twilio_auth_token` | sms | auth token |
+| `twilio_from_number` | sms | sender number |
+| `pushover_token` | push | application token |
+| `pushover_user` | push | user key, also the logged recipient |
+| `webhook_url` | webhook | endpoint the alert JSON is posted to |
 
-Gmail requires an "App Password" for SMTP access:
+A channel runs only when every column it needs holds a non-empty value. One empty or `NULL`
+credential disables the whole channel: the pass logs the attempt with status `skipped` and the
+sender's reason, and does not call the provider. The other channels of the same alert still run.
 
-1. Go to your Google Account: https://myaccount.google.com/
-2. Navigate to "Security"
-3. Enable "2-Step Verification" (if not already enabled)
-4. Under "2-Step Verification", find "App passwords"
-5. Generate a new app password for "Mail"
-6. Copy the 16-character password (without spaces)
-7. Use this as your SMTP_PASSWORD
+The row is read at the start of every pass, so a changed credential applies to the next run without
+a restart. The columns are set in the database — `sql/schema.sql` creates the table — and there is
+no environment-variable setup for the senders.
 
-## Supported Notification Channels
+## Preferences: `alert_notification_preferences`
 
-### 1. Email (SMTP)
+One row per asset and alert type decides whether and how an alert is delivered:
 
-**Configuration:**
-```env
-# .env file
-NOTIFICATION_EMAIL=your.email@example.com
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=your.email@gmail.com
-SMTP_PASSWORD=your-app-password
-SMTP_FROM=your.email@gmail.com  # Optional, defaults to SMTP_USER
-```
+| Column | Meaning |
+|---|---|
+| `asset_id` | the asset the row applies to |
+| `alert_type` | the alert type, or `NULL` for the wildcard row of the asset |
+| `min_confidence` | threshold, default `0.80` |
+| `notification_channels` | array of channel names, default `ARRAY['email']` |
+| `quiet_hours_start` | start of the quiet window, default `22:00` |
+| `quiet_hours_end` | end of the quiet window, default `07:00` |
+| `enabled` | whether the preference is active, default `TRUE` |
 
-**Supported Providers:**
-- Gmail (smtp.gmail.com:587)
-- Outlook (smtp-mail.outlook.com:587)
-- Yahoo (smtp.mail.yahoo.com:587)
-- Custom SMTP server
+The pass looks the alert up by `(asset_id, alert_type)` and falls back to the `alert_type IS NULL`
+row of the same asset. The outcome of a row:
 
-**Example Email:**
-```
-Subject: 🔔 Alert: Genpact (G) - Hiring Signal
+- **No row found, or `enabled = FALSE`** — the alert is marked notified without a send.
+- **`confidence_score` below `min_confidence`** — the alert is marked notified without a send.
+- **Inside the quiet window** — nothing is sent, logged or marked. The alert is deferred and the
+  next pass picks it up again; deferred alerts do not count as handled.
+- **Otherwise** — the pass sends over `notification_channels`, in array order. A name that matches
+  no sender is logged as a warning and skipped.
 
-Company: Genpact (G)
-Alert Type: Hiring Signal
-Confidence: 0.92
-Time: 2025-11-17 14:30:15
+Quiet hours include both ends. A window whose start is later than its end crosses midnight, so the
+default `22:00`–`07:00` blocks from 22:00 through 07:00, both times included. The window is
+evaluated against local time.
 
-Description:
-Multiple job postings detected across LinkedIn and Glassdoor for AI/ML
-positions. Indicates strong hiring momentum and potential expansion...
+## Audit: `notification_log`
 
-View Dashboard: http://localhost:8501
-```
+Every attempted channel writes one row with `alert_id`, `channel`, `recipient`, `status`,
+`sent_at` and `error_message`. The status is one of:
 
-### 2. SMS (Twilio)
+| Status | When | Recipient |
+|---|---|---|
+| `sent` | the sender returned without an error | the recipient the sender used |
+| `failed` | the sender raised, e.g. the provider rejected the message | `unknown` |
+| `skipped` | a required column is empty, so the sender was not called | `unknown` |
 
-**Setup:**
+`error_message` holds the provider text of a failure or the reason of a skip, cut to 500
+characters. A failing channel is not retried inside the pass: the alert stays unnotified and the
+next pass tries again, while the channels that did deliver are logged as `sent`.
 
-1. Create Twilio account: https://www.twilio.com/try-twilio
-2. Get your Account SID and Auth Token from dashboard
-3. Purchase a phone number
-4. Configure in .env:
+## Known limitation
 
-```env
-NOTIFICATION_PHONE=+1234567890
-TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-TWILIO_AUTH_TOKEN=your_auth_token
-TWILIO_FROM_NUMBER=+1987654321
-```
+An alert that reaches no deliverable channel — an empty `notification_channels` array, or every
+listed channel skipped or failed — is never marked notified. It is selected again by every pass and,
+because the pass always takes the newest 100, such alerts can keep older ones out of the batch
+(#34). Until that is fixed, give every active preference at least one configured channel, or
+disable the preference so its alerts are consumed.
 
-5. Install Twilio library (already in requirements):
-```bash
-pip install twilio
-```
-
-**Example SMS:**
-```
-🔔 Alert: Genpact (G)
-Hiring Signal
-Confidence: 0.92
-Multiple job postings detected across LinkedIn...
-```
-
-### 3. Push Notifications (Pushover)
-
-**Setup:**
-
-1. Create Pushover account: https://pushover.net/
-2. Install Pushover app on your phone (iOS/Android)
-3. Get your User Key from dashboard
-4. Create an application to get API Token
-5. Configure in .env:
-
-```env
-PUSHOVER_TOKEN=your_app_token
-PUSHOVER_USER=your_user_key
-```
-
-**Features:**
-- High-priority alerts (confidence >= 0.9)
-- Click-through to dashboard
-- Rich notifications with company info
-
-### 4. Webhook
-
-Send alerts to any HTTP endpoint (e.g., Slack, Discord, custom API):
-
-**Configuration:**
-```env
-WEBHOOK_URL=https://your-endpoint.com/alerts
-```
-
-**Payload:**
-```json
-{
-  "alert_id": 123,
-  "company_name": "Genpact",
-  "ticker": "G",
-  "alert_type": "hiring_signal",
-  "description": "Multiple job postings detected...",
-  "confidence_score": 0.92,
-  "timestamp": "2025-11-17T14:30:15"
-}
-```
-
-**Slack Example:**
-
-Create a Slack incoming webhook, then use a wrapper service like Zapier or create a simple proxy:
-
-```python
-# webhook_proxy.py - Forward to Slack
-from flask import Flask, request
-import requests
-
-app = Flask(__name__)
-SLACK_WEBHOOK = "https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
-
-@app.route('/alerts', methods=['POST'])
-def forward_to_slack():
-    data = request.json
-    slack_msg = {
-        "text": f"🔔 *{data['company_name']} ({data['ticker']})* Alert",
-        "attachments": [{
-            "color": "good" if data['confidence_score'] >= 0.85 else "warning",
-            "fields": [
-                {"title": "Type", "value": data['alert_type'], "short": True},
-                {"title": "Confidence", "value": f"{data['confidence_score']:.2f}", "short": True},
-                {"title": "Description", "value": data['description']}
-            ]
-        }]
-    }
-    requests.post(SLACK_WEBHOOK, json=slack_msg)
-    return "OK", 200
-```
-
-## Alert Type Settings
-
-### Hiring Signal 💼
-- **Default Confidence**: 0.85
-- **Use Case**: Early indicator of company expansion
-- **Example**: "3+ job postings in 24h indicates strong hiring momentum"
-
-### Negative Sentiment ⚠️
-- **Default Confidence**: 0.85
-- **Use Case**: Risk detection, potential bearish signal
-- **Example**: "Widespread negative reviews, potential reputation damage"
-
-### Problem Detected 🔴
-- **Default Confidence**: 0.80
-- **Use Case**: Critical issues, major red flags
-- **Example**: "SEC investigation announced, legal troubles reported"
-
-## Configuration via Dashboard
-
-Navigate to **Settings → Notification Settings** to configure:
-
-### Global Settings
-- **Email Address**: Where to receive email alerts
-- **Phone Number**: For SMS alerts (format: +1234567890)
-- **SMTP Credentials**: For sending emails
-- **Check Interval**: How often to check for new alerts (default: 5 minutes)
-
-### Per-Alert Settings
-For each alert type (Hiring, Negative Sentiment, Problem):
-- **Enable/Disable**: Turn notifications on/off
-- **Min Confidence**: Threshold (0.0-1.0)
-- **Channels**: Select email, sms, push, webhook
-
-### Quiet Hours
-- **Start Time**: When to stop sending notifications (default: 22:00)
-- **End Time**: When to resume notifications (default: 07:00)
-
-**Note**: Quiet hours span midnight (e.g., 22:00-07:00 means no notifications from 10 PM to 7 AM)
-
-## Environment Variables Reference
-
-```env
-# Email Configuration
-NOTIFICATION_EMAIL=your.email@example.com
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=your.email@gmail.com
-SMTP_PASSWORD=your-app-password
-SMTP_FROM=your.email@gmail.com
-
-# SMS Configuration (Optional)
-NOTIFICATION_PHONE=+1234567890
-TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-TWILIO_AUTH_TOKEN=your_auth_token
-TWILIO_FROM_NUMBER=+1987654321
-
-# Push Configuration (Optional)
-PUSHOVER_TOKEN=your_app_token
-PUSHOVER_USER=your_user_key
-
-# Webhook Configuration (Optional)
-WEBHOOK_URL=https://your-endpoint.com/alerts
-
-# Service Configuration
-NOTIFICATION_CHECK_INTERVAL=5  # Minutes between checks
-LOG_LEVEL=INFO
-```
-
-## Testing Notifications
-
-### 1. Test Email Manually
+## Operating it
 
 ```bash
-docker-compose exec notifier python3 -c "
-import os
-import smtplib
-from email.mime.text import MIMEText
-
-msg = MIMEText('Test alert from News Trading System')
-msg['Subject'] = 'Test Alert'
-msg['From'] = os.getenv('SMTP_USER')
-msg['To'] = os.getenv('NOTIFICATION_EMAIL')
-
-with smtplib.SMTP(os.getenv('SMTP_HOST'), int(os.getenv('SMTP_PORT'))) as server:
-    server.starttls()
-    server.login(os.getenv('SMTP_USER'), os.getenv('SMTP_PASSWORD'))
-    server.send_message(msg)
-
-print('Test email sent!')
-"
+uv run newstrading notify          # one pass over the waiting alerts
 ```
 
-### 2. Trigger a Test Alert
+The pass logs what it did to the console; the durable record is the `notification_log` table:
 
-Create a high-confidence alert manually in the database:
+```sql
+SELECT alert_id, channel, recipient, status, sent_at, error_message
+FROM notification_log
+ORDER BY sent_at DESC
+LIMIT 20;
 
-```bash
-docker-compose exec -T postgres psql -U trading -d newstrading <<EOF
-INSERT INTO alerts (company_id, alert_type, description, confidence_score)
-VALUES (
-    (SELECT id FROM companies LIMIT 1),
-    'hiring_signal',
-    'Test alert - please ignore',
-    0.95
-);
-EOF
+SELECT id, asset_id, alert_type, confidence_score, notified, notified_at
+FROM alerts
+WHERE notified = FALSE
+ORDER BY timestamp DESC;
 ```
 
-Wait 1-5 minutes for the notifier service to pick it up and send notification.
-
-### 3. Check Notification Logs
-
-```bash
-# View notifier service logs
-docker-compose logs -f notifier
-
-# Check database notification log
-docker-compose exec -T postgres psql -U trading -d newstrading -c "
-SELECT * FROM notification_log ORDER BY sent_at DESC LIMIT 10;
-"
-```
-
-## Troubleshooting
-
-### No notifications received
-
-1. **Check notifier service status:**
-   ```bash
-   docker-compose ps notifier
-   docker-compose logs notifier --tail=50
-   ```
-
-2. **Verify database preferences:**
-   ```bash
-   docker-compose exec -T postgres psql -U trading -d newstrading -c "
-   SELECT * FROM alert_notification_preferences;
-   "
-   ```
-
-3. **Check for unnotified alerts:**
-   ```bash
-   docker-compose exec -T postgres psql -U trading -d newstrading -c "
-   SELECT id, company_id, alert_type, confidence_score, notified
-   FROM alerts
-   WHERE notified = FALSE
-   ORDER BY timestamp DESC;
-   "
-   ```
-
-4. **Test SMTP connection:**
-   ```bash
-   docker-compose exec notifier python3 -c "
-   import os, smtplib
-   with smtplib.SMTP(os.getenv('SMTP_HOST'), int(os.getenv('SMTP_PORT'))) as s:
-       s.starttls()
-       s.login(os.getenv('SMTP_USER'), os.getenv('SMTP_PASSWORD'))
-       print('SMTP connection successful!')
-   "
-   ```
-
-### Gmail "Less secure app" error
-
-Gmail requires App Passwords (see setup section above). Regular passwords won't work with 2FA enabled.
-
-### Notifications during quiet hours
-
-Check system time zone alignment:
-```bash
-docker-compose exec notifier python3 -c "
-from datetime import datetime
-print(f'Container time: {datetime.now()}')
-"
-```
-
-If timezone is wrong, set in docker-compose.yml:
-```yaml
-notifier:
-  environment:
-    - TZ=Europe/Vienna  # Your timezone
-```
-
-### High notification volume
-
-Increase minimum confidence thresholds in Settings to reduce noise:
-- Hiring: 0.85 → 0.90
-- Negative Sentiment: 0.85 → 0.90
-- Problem: 0.80 → 0.85
-
-Or increase check interval from 5 minutes to 15-30 minutes.
-
-## Architecture
-
-```
-┌─────────────┐
-│  Analyzer   │ Creates alerts in database
-└──────┬──────┘
-       │
-       v
-┌─────────────┐
-│  Database   │ Stores alerts (notified=false)
-└──────┬──────┘
-       │
-       v
-┌─────────────┐
-│  Notifier   │ Checks every 5 min, sends notifications
-└──────┬──────┘
-       │
-       ├──→ Email (SMTP)
-       ├──→ SMS (Twilio)
-       ├──→ Push (Pushover)
-       └──→ Webhook
-```
-
-## Performance
-
-- **Latency**: 1-5 minutes from alert creation to notification (based on check interval)
-- **Reliability**: Notifications logged to database for audit trail
-- **Retry**: Failed notifications logged but not retried (check logs manually)
-- **Rate Limits**:
-  - Email: Depends on SMTP provider (Gmail: ~500/day)
-  - SMS: Depends on Twilio plan
-  - Push: Pushover has generous limits (10,000/month free tier)
-
-## Security
-
-- **Credentials**: Store sensitive data in .env file, never commit to git
-- **SMTP**: Use app-specific passwords, not your main account password
-- **Twilio**: Rotate auth tokens regularly
-- **Webhooks**: Use HTTPS endpoints, validate requests if possible
-
-## Future Enhancements
-
-See [IDEAS.md](IDEAS.md) Section 3.2 for planned features:
-- Daily digest emails
-- Per-company notification preferences
-- Alert clustering (send 1 notification for 3+ similar alerts)
-- Notification scheduling (specific days/times)
-- Mobile app integration
-
-## Support
-
-For issues or questions:
-1. Check [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
-2. Review notifier logs: `docker-compose logs notifier`
-3. Open GitHub issue with logs and configuration (redact credentials!)
+An alert that stays in the second result across several passes either has no deliverable channel or
+waits for the end of its quiet window.
