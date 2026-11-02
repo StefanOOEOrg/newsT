@@ -6,6 +6,7 @@ from newstrading.collectors.events import Event, EventCollector, EventStore
 from newstrading.collectors.finnhub import FinnhubCollector
 from newstrading.collectors.models import Asset, Post
 from newstrading.collectors.newsapi import NewsAPICollector
+from newstrading.collectors.prices import PriceBar, PriceStore, StockPriceCollector
 from newstrading.collectors.registry import Collector, CollectorError, CollectorRegistry
 from newstrading.collectors.rss import Feed, RSSCollector
 
@@ -23,5 +24,8 @@ __all__ = [
     "FinnhubCollector",
     "NewsAPICollector",
     "Post",
+    "PriceBar",
+    "PriceStore",
     "RSSCollector",
+    "StockPriceCollector",
 ]

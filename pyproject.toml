@@ -15,6 +15,7 @@ dependencies = [
     "python-toon==0.2.0",
     "pytz>=2024.1",
     "requests>=2.31,<3",
+    "yfinance>=0.2.50,<1",
 ]
 
 [dependency-groups]
