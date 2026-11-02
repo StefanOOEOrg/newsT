@@ -399,7 +399,9 @@ CREATE TABLE IF NOT EXISTS asset_events (
     source VARCHAR(100),  -- 'alphavantage', 'yahoo', 'sec_edgar', 'manual'
     metadata JSONB,  -- Additional event-specific data
     created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
+    updated_at TIMESTAMP DEFAULT NOW(),
+    -- Unique key the event store relies on for its idempotent ON CONFLICT insert
+    UNIQUE(asset_id, event_type, event_date, description)
 );
 
 -- Indexes for efficient queries
