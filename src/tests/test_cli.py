@@ -10,7 +10,14 @@ from pathlib import Path
 import pytest
 
 from newstrading import __version__
-from newstrading.cli import _completion, build_parser, collect_once, init_db, main
+from newstrading.cli import (
+    _completion,
+    build_parser,
+    collect_once,
+    collect_prices_once,
+    init_db,
+    main,
+)
 from newstrading.config import Settings
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -80,6 +87,9 @@ def environment(monkeypatch):
     for name in CONFIGURED:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr("newstrading.cli.configure_logging", lambda settings: None)
+    # The price pass needs yfinance and a database; its own tests and the tests below
+    # replace it, so no test here reaches the network.
+    monkeypatch.setattr("newstrading.cli.collect_prices_once", lambda settings: 0)
     return monkeypatch
 
 
@@ -525,6 +535,76 @@ def test_init_db_rolls_back_when_the_schema_fails(environment):
         init_db(SETTINGS)
 
     assert (connection.commits, connection.rollbacks, connection.closes) == (0, 1, 1)
+
+
+def test_collect_reports_the_stored_price_bars(environment, caplog):
+    """``collect`` runs the price pass after the posts and logs the stored bars."""
+    environment.setenv("DATABASE_URL", URL)
+    install_collection(environment, {"rss": StaticCollector([object()])})
+    environment.setattr("newstrading.cli.collect_prices_once", lambda settings: 42)
+
+    with caplog.at_level(logging.INFO, logger="newstrading.cli"):
+        assert main(["collect"]) == 0
+
+    assert "1 post(s) stored" in caplog.text
+    assert "42 price bar(s) stored" in caplog.text
+
+
+def test_a_failing_price_pass_does_not_abort_the_collect_command(environment, caplog):
+    """A price failure is logged like a source failure; the post pass already stored."""
+    environment.setenv("DATABASE_URL", URL)
+    _, store = install_collection(environment, {"rss": StaticCollector([object()])})
+
+    def failing_prices(settings):
+        raise RuntimeError("yahoo down")
+
+    environment.setattr("newstrading.cli.collect_prices_once", failing_prices)
+
+    with caplog.at_level(logging.INFO, logger="newstrading.cli"):
+        assert main(["collect"]) == 0
+
+    assert len(store.saved) == 1
+    assert "price collection failed" in caplog.text
+    assert "yahoo down" in caplog.text
+    assert "0 price bar(s) stored" in caplog.text
+
+
+def test_collect_prices_once_stores_the_bars_of_every_asset(environment):
+    """Every asset is collected once and its bars stored; a broken asset is skipped."""
+    collected = []
+
+    class FakeAssets:
+        def __init__(self, settings):
+            self.settings = settings
+
+        def list_for_collection(self):
+            return ["first", "second", "third"]
+
+    class FakePriceCollector:
+        def __init__(self, settings, *, limiter):
+            assert limiter is not None
+
+        def collect_for_asset(self, asset):
+            if asset == "third":
+                raise RuntimeError("no ticker")
+            collected.append(asset)
+            return [f"{asset}-bar"]
+
+    class FakePriceStore:
+        def __init__(self, settings):
+            self.saved = []
+
+        def save(self, bars):
+            self.saved.append(list(bars))
+            return len(bars)
+
+    environment.setattr("newstrading.cli.AssetStore", FakeAssets)
+    environment.setattr("newstrading.cli.StockPriceCollector", FakePriceCollector)
+    environment.setattr("newstrading.cli.PriceStore", FakePriceStore)
+    environment.setattr("newstrading.cli.RateLimiter", lambda settings, name: object())
+
+    assert collect_prices_once(SETTINGS) == 2
+    assert collected == ["first", "second"]
 
 
 def test_collect_once_stores_what_the_collectors_return(environment):

@@ -26,6 +26,7 @@ from newstrading.analysis.parser import Analysis
 from newstrading.collectors.assets import AssetStore
 from newstrading.collectors.factories import SOURCE_NAMES, build_registry
 from newstrading.collectors.posts import PostStore
+from newstrading.collectors.prices import PriceStore, StockPriceCollector
 from newstrading.collectors.registry import CollectorError
 from newstrading.config import Settings, from_env
 from newstrading.db import connect
@@ -33,6 +34,7 @@ from newstrading.errors import CollectorConfigError, ConfigError, NewsTradingErr
 from newstrading.keywords import KeywordTracker
 from newstrading.logging_config import configure_logging
 from newstrading.notify.service import NotificationService
+from newstrading.rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +149,7 @@ def run_command(command: str, settings: Settings) -> int:
         logger.info("database schema applied")
     elif command == "collect":
         logger.info("%d post(s) stored", collect_once(settings))
+        logger.info("%d price bar(s) stored", _stored_prices(settings))
     elif command == "analyze":
         logger.info("%d post(s) analyzed", analyze_pending(settings))
     else:
@@ -242,6 +245,56 @@ def collect_once(settings: Settings) -> int:
     if attempted and not succeeded:
         raise NewsTradingError(f"every source failed: {', '.join(collectors)}")
     return stored
+
+
+_PRICE_LIMIT_NAME = "StockPriceCollector"
+"""Name of the price collector's quota row in ``rate_limit_config``."""
+
+
+def collect_prices_once(settings: Settings) -> int:
+    """Collect and store one round of price bars for every tracked asset.
+
+    Runs after the post collectors of :func:`collect_once`; the quota row named
+    ``StockPriceCollector`` is checked before every Yahoo Finance call.
+
+    Args:
+        settings: Settings handed to the collector, the store and the limiter.
+
+    Returns:
+        The number of bars that were new.
+
+    Contract:
+        A failing asset is logged like a failing source and does not stop the pass over
+        the other assets.
+    """
+    collector = StockPriceCollector(settings, limiter=RateLimiter(settings, _PRICE_LIMIT_NAME))
+    store = PriceStore(settings)
+    stored = 0
+    for asset in AssetStore(settings).list_for_collection():
+        try:
+            stored += store.save(collector.collect_for_asset(asset))
+        # boundary: one broken asset must not abort the price pass
+        except Exception:
+            logger.exception("price collection failed for asset %s", getattr(asset, "name", asset))
+    return stored
+
+
+def _stored_prices(settings: Settings) -> int:
+    """Run the price pass of ``collect`` and report a whole-pass failure as a log line.
+
+    Args:
+        settings: Settings handed to :func:`collect_prices_once`.
+
+    Returns:
+        The number of new bars, or ``0`` when the pass failed; a price failure never
+        fails the ``collect`` command, whose posts are already stored.
+    """
+    try:
+        return collect_prices_once(settings)
+    # boundary: prices are secondary; a broken price pass must not fail the post pass
+    except Exception:
+        logger.exception("price collection failed")
+        return 0
 
 
 def analyze_pending(settings: Settings) -> int:
