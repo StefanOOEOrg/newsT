@@ -1,6 +1,5 @@
 """Tests for newstrading.collectors.congress."""
 
-import hashlib
 import inspect
 from datetime import UTC, datetime
 
@@ -103,9 +102,9 @@ def trade(**overrides):
 
 
 def post_id_for(politician, ticker, transaction_date, transaction_type):
-    """The id the documented scheme derives from the trade's identity."""
-    key = f"{politician}:{ticker}:{transaction_date}:{transaction_type}"
-    return "congress_" + hashlib.md5(key.encode()).hexdigest()
+    """The id the legacy scheme derives from the trade's identity, capped at 255."""
+    post_id = f"congress_{politician}_{ticker}_{transaction_date}_{transaction_type}"
+    return post_id.replace(" ", "_").lower()[:255]
 
 
 def collect_one(item, *, limiter=None, settings=None, http=None):
@@ -164,7 +163,7 @@ def test_a_sale_gets_the_sale_icon():
     assert "Sale (Partial)" in post.title
 
 
-def test_the_post_id_follows_the_documented_scheme_and_is_stable():
+def test_the_post_id_follows_the_legacy_scheme_and_is_stable():
     """Same trade, same id; a different transaction type gets a different id."""
     http = FakeHttp(FakeResponse([trade()]), FakeResponse([trade()]))
     collector = CongressionalTradesCollector(make_settings(), http=http)
@@ -177,6 +176,14 @@ def test_the_post_id_follows_the_documented_scheme_and_is_stable():
     assert first[0].post_id.startswith("congress_")
     assert second[0].post_id == first[0].post_id
     assert other.post_id != first[0].post_id
+
+
+def test_the_post_id_is_capped_at_the_post_id_column_width():
+    """A very long politician name cannot overflow the 255 character column."""
+    post = collect_one(trade(representative="A " * 200))
+
+    assert len(post.post_id) == 255
+    assert post.post_id.startswith("congress_a_a_a")
 
 
 def test_the_premium_query_parameters_and_date_window_reach_http():

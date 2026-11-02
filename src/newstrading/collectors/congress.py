@@ -7,7 +7,6 @@ are configured; a missing key is not an error, it only means "public source only
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import re
 from collections.abc import Callable
@@ -92,18 +91,16 @@ def post_id_for(trade: dict[str, Any]) -> str:
         trade: Normalised trade dictionary.
 
     Returns:
-        ``congress_<md5>`` over politician, ticker, transaction date and type — the
-        fields that make a trade unique, truncated to the post id column.
+        The legacy readable id ``congress_<politician>_<ticker>_<transaction_date>_
+        <transaction_type>`` with spaces replaced by ``_`` and lower case, truncated to
+        the post id column — the same string the legacy collector used as de-duplication
+        key, so a cut-over does not re-insert existing posts.
     """
-    key = ":".join(
-        (
-            str(trade["politician"]),
-            str(trade["ticker"]),
-            str(trade["transaction_date"]),
-            str(trade["transaction_type"]),
-        )
+    post_id = (
+        f"congress_{trade['politician']}_{trade['ticker']}_"
+        f"{trade['transaction_date']}_{trade['transaction_type']}"
     )
-    return ("congress_" + hashlib.md5(key.encode()).hexdigest())[:MAX_POST_ID]
+    return post_id.replace(" ", "_").lower()[:MAX_POST_ID]
 
 
 def _created_at(value: Any) -> datetime:

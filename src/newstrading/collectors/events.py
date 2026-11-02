@@ -1,7 +1,7 @@
 """Event collector and store: dated events in, rows of ``asset_events`` out.
 
-An event is not a post, so it gets its own model and its own store. Both legacy event
-feeds are merged into one call and de-duplicated by the unique key of ``asset_events``
+An event is not a post, so it gets its own model and its own store. The earnings
+calendar feed of the legacy collector is mapped onto the unique key of ``asset_events``
 (asset, event type, event date, title).
 """
 
@@ -26,7 +26,6 @@ logger = logging.getLogger(__name__)
 
 API_URL = "https://www.alphavantage.co/query"
 CALENDAR_FUNCTION = "EARNINGS_CALENDAR"
-NATIVE_FUNCTION = "EARNINGS"
 EVENT_TYPE = "earnings"
 SOURCE = "alphavantage"
 TIMEOUT_SECONDS = 10
@@ -49,9 +48,6 @@ class HttpResponse(Protocol):
 
     status_code: int
     text: str
-
-    def json(self) -> Any:
-        """Return the decoded body."""
 
 
 Http = Callable[..., HttpResponse]
@@ -79,7 +75,7 @@ class Event:
 
 
 class EventCollector:
-    """Collects the dated events of one asset from the Alpha Vantage feeds."""
+    """Collects the dated events of one asset from the Alpha Vantage earnings calendar."""
 
     name = "events"
 
@@ -103,22 +99,21 @@ class EventCollector:
         self._limiter = limiter
 
     def collect_for_asset(self, asset: Asset) -> list[Event]:
-        """Collect every event Alpha Vantage carries for ``asset``.
+        """Collect the earnings calendar events Alpha Vantage carries for ``asset``.
 
         Args:
             asset: The asset to search for, matched by its ticker.
 
         Returns:
-            The merged, de-duplicated events of both feeds; empty when the key is
-            missing, the quota denies a call or the request fails.
+            The de-duplicated events of the calendar feed; empty when the key is
+            missing, the quota denies the call or the request fails.
         """
         if not self._api_key:
             logger.info("ALPHAVANTAGE_API_KEY is not set; no events for %s", asset.ticker)
             return []
-        events = self._calendar_events(asset) + self._native_events(asset)
-        unique = _unique(events)
-        logger.info("Event collector found %s events for %s", len(unique), asset.ticker)
-        return unique
+        events = _unique(self._calendar_events(asset))
+        logger.info("Event collector found %s events for %s", len(events), asset.ticker)
+        return events
 
     def _calendar_events(self, asset: Asset) -> list[Event]:
         """Ask the earnings calendar feed and parse its CSV rows."""
@@ -130,34 +125,6 @@ class EventCollector:
             return []
         self._record(success=True, status_code=response.status_code)
         return self._parse_calendar(response.text, asset)
-
-    def _native_events(self, asset: Asset) -> list[Event]:
-        """Ask the per-symbol earnings feed and parse its JSON rows."""
-        response = self._request(asset, NATIVE_FUNCTION)
-        if response is None:
-            return []
-        if response.status_code != 200:
-            self._record(success=False, status_code=response.status_code)
-            return []
-        try:
-            payload = response.json()
-        # boundary: a body that cannot be read is a failed call, not an exception
-        except Exception as error:
-            logger.warning("Alpha Vantage earnings body could not be read: %s", error)
-            self._record(success=False, status_code=response.status_code, error_message=str(error))
-            return []
-        rows = payload.get("quarterlyEarnings") if isinstance(payload, dict) else None
-        if not isinstance(rows, list):
-            logger.warning("Alpha Vantage earnings body for %s has no quarterly rows", asset.ticker)
-            self._record(
-                success=False,
-                status_code=response.status_code,
-                error_message="no quarterlyEarnings list",
-            )
-            return []
-        self._record(success=True, status_code=response.status_code)
-        symbol = _text(payload.get("symbol")) or asset.ticker
-        return [event for row in rows if (event := self._native_event(row, asset, symbol))]
 
     def _parse_calendar(self, text: str, asset: Asset) -> list[Event]:
         """Turn the earnings calendar CSV into events, skipping the rows without a day."""
@@ -184,22 +151,6 @@ class EventCollector:
             fiscal_date_ending=values[3] if len(values) > 3 else None,
             eps_estimate=values[4] if len(values) > 4 else None,
             symbol=values[0] or asset.ticker,
-        )
-        return _event(asset, event_date, details)
-
-    def _native_event(self, row: Any, asset: Asset, symbol: str) -> Event | None:
-        """Map one JSON row, or ``None`` when it has no usable date."""
-        if not isinstance(row, dict):
-            logger.warning("Alpha Vantage earnings row for %s is not an object", asset.ticker)
-            return None
-        event_date = _event_date(row.get("reportedDate"), asset.ticker)
-        if event_date is None:
-            return None
-        details = _details(
-            fiscal_date_ending=row.get("fiscalDateEnding"),
-            reported_eps=row.get("reportedEPS"),
-            estimated_eps=row.get("estimatedEPS"),
-            symbol=symbol,
         )
         return _event(asset, event_date, details)
 
@@ -351,8 +302,3 @@ def _unique(events: list[Event]) -> list[Event]:
         seen.add(key)
         unique.append(event)
     return unique
-
-
-def _text(value: Any) -> str:
-    """Return ``value`` as text, or an empty string for ``None``."""
-    return "" if value is None else str(value)

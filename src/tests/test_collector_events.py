@@ -88,24 +88,9 @@ def calendar_csv(*rows):
     return "\n".join([CALENDAR_HEADER, *rows])
 
 
-def earnings_json(*rows):
-    """Build the JSON body Alpha Vantage's earnings endpoint returns."""
-    return {"symbol": "TSLA", "quarterlyEarnings": list(rows)}
-
-
 def calendar_row(report_date, *, fiscal="2026-12-31", estimate="1.25"):
     """One earnings calendar row."""
     return f"TSLA,Tesla Inc,{report_date},{fiscal},{estimate},USD"
-
-
-def earnings_row(report_date, *, fiscal="2026-12-31", reported="1.31"):
-    """One quarterly earnings row."""
-    return {
-        "fiscalDateEnding": fiscal,
-        "reportedDate": report_date,
-        "reportedEPS": reported,
-        "estimatedEPS": "1.25",
-    }
 
 
 def collect(*responses, settings=SETTINGS, limiter=None):
@@ -115,26 +100,22 @@ def collect(*responses, settings=SETTINGS, limiter=None):
     return collector.collect_for_asset(ASSET), http
 
 
-def test_both_sources_are_asked_and_their_rows_are_merged_and_deduplicated():
-    """The calendar row and the same earnings row from the JSON feed collapse into one."""
-    calendar = calendar_csv(calendar_row("2027-01-27"))
-    earnings = earnings_json(
-        earnings_row("2027-01-27"),
-        earnings_row("2027-04-28", fiscal="2027-03-31", reported="1.10"),
+def test_the_calendar_source_is_asked_and_duplicate_rows_collapse():
+    """Calendar rows become events; a repeated report date keeps only the first row."""
+    calendar = calendar_csv(
+        calendar_row("2027-01-27"),
+        calendar_row("2027-01-27"),
+        calendar_row("2027-04-28", fiscal="2027-03-31", estimate="1.10"),
     )
 
-    events, http = collect(FakeResponse(calendar), FakeResponse(earnings))
+    events, http = collect(FakeResponse(calendar))
 
-    assert len(http.calls) == 2
-    assert [call["params"]["function"] for call in http.calls] == [
-        "EARNINGS_CALENDAR",
-        "EARNINGS",
-    ]
-    assert len(events) == 2
-    assert {event.event_date for event in events} == {
+    assert len(http.calls) == 1
+    assert [call["params"]["function"] for call in http.calls] == ["EARNINGS_CALENDAR"]
+    assert [event.event_date for event in events] == [
         datetime(2027, 1, 27, tzinfo=UTC),
         datetime(2027, 4, 28, tzinfo=UTC),
-    }
+    ]
     assert {event.event_type for event in events} == {"earnings"}
     assert {event.title for event in events} == {"Earnings report for Tesla"}
     assert {event.source for event in events} == {"alphavantage"}
@@ -142,24 +123,22 @@ def test_both_sources_are_asked_and_their_rows_are_merged_and_deduplicated():
 
 
 def test_the_documented_query_parameters_reach_http():
-    """Both feeds are asked for the ticker with the key, on the documented URL."""
-    events, http = collect(FakeResponse(calendar_csv()), FakeResponse(earnings_json()))
+    """The calendar feed is asked for the ticker with the key, on the documented URL."""
+    events, http = collect(FakeResponse(calendar_csv()))
 
     assert events == []
-    assert len(http.calls) == 2
+    assert len(http.calls) == 1
     for call in http.calls:
         assert call["url"] == CALENDAR_URL
         assert call["timeout"] == 10
         assert call["params"]["symbol"] == "TSLA"
         assert call["params"]["apikey"] == "alpha-key"
+        assert call["params"]["function"] == "EARNINGS_CALENDAR"
 
 
 def test_the_event_date_is_timezone_aware_utc():
     """A date-only source row becomes a UTC timestamp."""
-    events, _ = collect(
-        FakeResponse(calendar_csv(calendar_row("2027-01-27"))),
-        FakeResponse(earnings_json()),
-    )
+    events, _ = collect(FakeResponse(calendar_csv(calendar_row("2027-01-27"))))
 
     assert len(events) == 1
     assert events[0].event_date == datetime(2027, 1, 27, tzinfo=UTC)
@@ -173,19 +152,7 @@ def test_a_row_without_a_date_is_skipped_and_the_others_survive():
         calendar_row("2027-01-27", fiscal="2026-12-31", estimate="1.25"),
     )
 
-    events, _ = collect(FakeResponse(calendar), FakeResponse(earnings_json()))
-
-    assert [event.event_date for event in events] == [datetime(2027, 1, 27, tzinfo=UTC)]
-
-
-def test_a_json_row_without_a_date_is_skipped():
-    """The same rule holds for the JSON feed's rows."""
-    earnings = earnings_json(
-        earnings_row(None),
-        earnings_row("2027-01-27"),
-    )
-
-    events, _ = collect(FakeResponse(calendar_csv()), FakeResponse(earnings))
+    events, _ = collect(FakeResponse(calendar))
 
     assert [event.event_date for event in events] == [datetime(2027, 1, 27, tzinfo=UTC)]
 
@@ -193,10 +160,7 @@ def test_a_json_row_without_a_date_is_skipped():
 def test_the_calendar_metadata_travels_in_details():
     """The free-form payload carries what the source row said."""
     events, _ = collect(
-        FakeResponse(
-            calendar_csv(calendar_row("2027-01-27", fiscal="2026-12-31", estimate="1.25"))
-        ),
-        FakeResponse(earnings_json()),
+        FakeResponse(calendar_csv(calendar_row("2027-01-27", fiscal="2026-12-31", estimate="1.25")))
     )
 
     assert events[0].details == {
@@ -221,33 +185,25 @@ def test_a_missing_api_key_yields_no_events_without_a_request():
 
 @pytest.mark.parametrize("status_code", [500, 429])
 def test_an_error_status_yields_no_events_and_records_a_failure(status_code):
-    """Both calls fail: no events, one failed usage row per call."""
+    """The call fails: no events, one failed usage row."""
     limiter = FakeLimiter()
 
-    events, _ = collect(
-        FakeResponse("", status_code=status_code),
-        FakeResponse({"Information": "rate limited"}, status_code=status_code),
-        limiter=limiter,
-    )
+    events, _ = collect(FakeResponse("", status_code=status_code), limiter=limiter)
 
     assert events == []
-    assert len(limiter.records) == 2
-    assert all(record["success"] is False for record in limiter.records)
-    assert [record["status_code"] for record in limiter.records] == [status_code, status_code]
+    assert len(limiter.records) == 1
+    assert limiter.records[0]["success"] is False
+    assert limiter.records[0]["status_code"] == status_code
 
 
 def test_a_network_error_yields_no_events_and_does_not_raise():
     """A transport failure is logged and booked, never raised."""
     limiter = FakeLimiter()
 
-    events, _ = collect(
-        requests.ConnectionError("connection refused"),
-        requests.ConnectionError("connection refused"),
-        limiter=limiter,
-    )
+    events, _ = collect(requests.ConnectionError("connection refused"), limiter=limiter)
 
     assert events == []
-    assert [record["success"] for record in limiter.records] == [False, False]
+    assert [record["success"] for record in limiter.records] == [False]
 
 
 def test_a_denied_quota_yields_no_events_and_records_nothing():
@@ -256,7 +212,6 @@ def test_a_denied_quota_yields_no_events_and_records_nothing():
 
     events, http = collect(
         FakeResponse(calendar_csv(calendar_row("2027-01-27"))),
-        FakeResponse(earnings_json()),
         limiter=limiter,
     )
 
@@ -266,24 +221,21 @@ def test_a_denied_quota_yields_no_events_and_records_nothing():
 
 
 def test_a_successful_call_is_recorded_with_its_status():
-    """Each allowed call is booked as a success with status 200."""
+    """An allowed call is booked as a success with status 200."""
     limiter = FakeLimiter()
 
-    collect(FakeResponse(calendar_csv()), FakeResponse(earnings_json()), limiter=limiter)
+    collect(FakeResponse(calendar_csv()), limiter=limiter)
 
-    assert [record["success"] for record in limiter.records] == [True, True]
-    assert [record["status_code"] for record in limiter.records] == [200, 200]
+    assert [record["success"] for record in limiter.records] == [True]
+    assert [record["status_code"] for record in limiter.records] == [200]
 
 
 def test_without_a_limiter_nothing_is_tracked():
     """``limiter=None`` means no quota bookkeeping, not a skipped call."""
-    events, http = collect(
-        FakeResponse(calendar_csv(calendar_row("2027-01-27"))),
-        FakeResponse(earnings_json()),
-    )
+    events, http = collect(FakeResponse(calendar_csv(calendar_row("2027-01-27"))))
 
     assert len(events) == 1
-    assert len(http.calls) == 2
+    assert len(http.calls) == 1
 
 
 def test_the_event_collector_fits_the_collector_protocol():
