@@ -2,13 +2,15 @@
 
 import logging
 import re
+import sys
+import types
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from newstrading import __version__
-from newstrading.cli import build_parser, collect_once, init_db, main
+from newstrading.cli import _completion, build_parser, collect_once, init_db, main
 from newstrading.config import Settings
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -207,6 +209,126 @@ def test_main_analyze_dispatches_to_the_analysis_pass(environment):
     assert main(["analyze"]) == 0
 
     assert [settings.anthropic_api_key for settings in calls] == ["sk-test"]
+
+
+class FakeTextBlock:
+    """One content block of a model answer."""
+
+    def __init__(self, text):
+        self.text = text
+
+
+class FakeMessage:
+    """A model answer with the given content blocks."""
+
+    def __init__(self, texts):
+        self.content = [FakeTextBlock(text) for text in texts]
+
+
+class FakeClient:
+    """Stands in for ``anthropic.Anthropic`` and answers from a list."""
+
+    def __init__(self, answers):
+        self.answers = list(answers)
+        self.requests = []
+        self.api_key = None
+
+    def __call__(self, api_key):
+        self.api_key = api_key
+        return self
+
+    @property
+    def messages(self):
+        return self
+
+    def create(self, **kwargs):
+        self.requests.append(kwargs)
+        return FakeMessage(self.answers.pop(0))
+
+
+def test_the_model_call_adds_the_legacy_prefill_and_keeps_a_json_answer(environment):
+    """The completion sends the prompt with the prefill and returns the raw answer."""
+    client = FakeClient([["positive\nsentiment_score: 0.8"], ['{"sentiment": "negative"}'], []])
+    environment.setattr("newstrading.cli.Anthropic", client)
+
+    complete = _completion(SETTINGS)
+
+    assert complete("the prompt") == "sentiment:positive\nsentiment_score: 0.8"
+    assert complete("the prompt") == '{"sentiment": "negative"}'
+    assert complete("the prompt") == ""
+    assert client.api_key == "sk-test"
+    assert client.requests[0] == {
+        "model": SETTINGS.ai_model,
+        "max_tokens": SETTINGS.max_tokens,
+        "messages": [
+            {"role": "user", "content": "the prompt"},
+            {"role": "assistant", "content": "sentiment:"},
+        ],
+    }
+
+
+def test_analyze_generates_alerts_per_analysis_and_updates_the_metrics_once(environment, caplog):
+    """``analyze`` stores the analyses, alerts each one and refreshes metrics afterwards.
+
+    The analyzer of ``analysis.service`` is replaced in ``sys.modules``: the wiring is
+    what this test covers, not the batch itself (that is #37). No network, no database.
+    """
+    environment.setenv("DATABASE_URL", URL)
+    environment.setenv("ANTHROPIC_API_KEY", "sk-test")
+    analyses = [object(), object()]
+    order = []
+    built = {}
+
+    class FakeAnalyzer:
+        def __init__(self, settings, *, complete, on_analysis):
+            built.update(settings=settings, complete=complete, on_analysis=on_analysis)
+            self.on_analysis = on_analysis
+            order.append("analyzer")
+
+        def analyze_pending(self, limit=20):
+            built["limit"] = limit
+            for analysis in analyses:
+                self.on_analysis(analysis)
+            order.append("analyzed")
+            return len(analyses)
+
+    service = types.ModuleType("newstrading.analysis.service")
+    service.Analyzer = FakeAnalyzer
+    environment.setitem(sys.modules, "newstrading.analysis.service", service)
+
+    generated = []
+
+    class FakeGenerator:
+        def __init__(self, settings):
+            self.settings = settings
+            generated.append(self)
+
+        def generate(self, analysis):
+            order.append(analysis)
+            return 1
+
+    environment.setattr("newstrading.cli.AlertGenerator", FakeGenerator)
+    environment.setattr("newstrading.cli._completion", lambda settings: "model-call")
+    metrics = []
+
+    def fake_update_daily_metrics(settings):
+        order.append("metrics")
+        metrics.append(settings)
+        return 0
+
+    environment.setattr("newstrading.cli.update_daily_metrics", fake_update_daily_metrics)
+
+    with caplog.at_level(logging.INFO, logger="newstrading.cli"):
+        assert main(["analyze"]) == 0
+
+    assert order == ["analyzer", *analyses, "analyzed", "metrics"]
+    assert len(generated) == 1
+    assert generated[0].settings == built["settings"]
+    assert built["on_analysis"] == generated[0].generate
+    assert built["complete"] == "model-call"
+    assert built["limit"] == 20
+    assert metrics == [built["settings"]]
+    assert "2 post(s) analyzed" in caplog.text
 
 
 def test_main_notify_dispatches_to_the_notification_service(environment):
