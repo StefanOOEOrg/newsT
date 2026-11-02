@@ -1,6 +1,8 @@
 """Tests for newstrading.cli: the four commands, their dispatch and their exit codes."""
 
+import logging
 import re
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -12,6 +14,12 @@ from newstrading.config import Settings
 ROOT = Path(__file__).resolve().parents[2]
 URL = "postgresql://app:secret@db.internal:5432/newstrading"
 SETTINGS = Settings(database_url=URL, anthropic_api_key="sk-test")
+KEYED_SETTINGS = replace(
+    SETTINGS,
+    newsapi_key="newsapi-key",
+    finnhub_api_key="finnhub-key",
+    alphavantage_api_key="alphavantage-key",
+)
 
 COMMANDS = ("init-db", "collect", "analyze", "notify")
 
@@ -71,6 +79,74 @@ def environment(monkeypatch):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr("newstrading.cli.configure_logging", lambda settings: None)
     return monkeypatch
+
+
+class StaticCollector:
+    """A collector that returns the posts it was given."""
+
+    def __init__(self, posts):
+        self._posts = posts
+        self.assets = []
+
+    def collect_for_asset(self, asset):
+        self.assets.append(asset)
+        return list(self._posts)
+
+
+class BrokenCollector:
+    """A collector whose source is down."""
+
+    def __init__(self, error="feed exploded"):
+        self._error = error
+        self.calls = 0
+
+    def collect_for_asset(self, asset):
+        self.calls += 1
+        raise RuntimeError(self._error)
+
+
+class FakeAssetStore:
+    """Serves a fixed asset list; usable as the ``AssetStore`` class double."""
+
+    def __init__(self, assets):
+        self._assets = tuple(assets)
+
+    def __call__(self, settings):
+        return self
+
+    def list_for_collection(self):
+        return list(self._assets)
+
+
+class RecordingStore:
+    """Records what the collectors hand to the store."""
+
+    def __init__(self):
+        self.saved = []
+
+    def __call__(self, settings, *, keyword_tracker):
+        return self
+
+    def save(self, collected):
+        self.saved.append(list(collected))
+        return len(collected)
+
+
+def install_collection(environment, collectors, assets=("first",)):
+    """Patch the collaborators of ``collect_once`` and record the sources it builds."""
+    names = []
+    store = RecordingStore()
+
+    class FakeRegistry:
+        def create_all(self, requested, settings):
+            names.extend(requested)
+            return collectors
+
+    environment.setattr("newstrading.cli.build_registry", lambda settings: FakeRegistry())
+    environment.setattr("newstrading.cli.AssetStore", FakeAssetStore(assets))
+    environment.setattr("newstrading.cli.PostStore", store)
+    environment.setattr("newstrading.cli.KeywordTracker", lambda settings: object())
+    return names, store
 
 
 def test_build_parser_exposes_the_four_commands():
@@ -192,14 +268,71 @@ def test_analyze_without_the_model_key_exits_2_and_names_it(environment, capsys)
     assert calls == []
 
 
-def test_collect_reports_a_missing_api_key_as_a_configuration_error(environment, capsys):
-    """A collector without its key is exit 2 with the variable name, not a traceback."""
+def test_collect_builds_only_the_sources_without_a_key(environment):
+    """Only ``DATABASE_URL``: the two free sources run and the keyed ones are never built."""
     environment.setenv("DATABASE_URL", URL)
+    posts = [object(), object()]
+    names, store = install_collection(
+        environment,
+        {"rss": StaticCollector(posts), "congressional_trades": StaticCollector([])},
+    )
 
-    assert main(["collect"]) == 2
+    assert main(["collect"]) == 0
+
+    assert names == ["rss", "congressional_trades"]
+    assert store.saved == [posts, []]
+
+
+@pytest.mark.parametrize(
+    ("variable", "source"),
+    [
+        ("NEWSAPI_KEY", "newsapi"),
+        ("FINNHUB_API_KEY", "finnhub"),
+        ("ALPHAVANTAGE_API_KEY", "alphavantage"),
+    ],
+)
+def test_a_configured_key_adds_exactly_its_own_source(environment, variable, source):
+    """One key enables its source; the other keyed sources stay out of the pass."""
+    environment.setenv("DATABASE_URL", URL)
+    environment.setenv(variable, "secret")
+    names, _ = install_collection(environment, {source: StaticCollector([])})
+
+    assert main(["collect"]) == 0
+
+    assert names == ["rss", source, "congressional_trades"]
+
+
+def test_a_failing_source_does_not_stop_the_others(environment, caplog):
+    """A broken source is logged with its name, the pass continues and exits 0."""
+    environment.setenv("DATABASE_URL", URL)
+    broken = BrokenCollector()
+    posts = [object()]
+    names, store = install_collection(
+        environment, {"rss": broken, "congressional_trades": StaticCollector(posts)}
+    )
+
+    with caplog.at_level(logging.ERROR, logger="newstrading.cli"):
+        assert main(["collect"]) == 0
+
+    assert names == ["rss", "congressional_trades"]
+    assert broken.calls == 1
+    assert store.saved == [posts]
+    assert "rss" in caplog.text
+    assert "feed exploded" in caplog.text
+
+
+def test_collect_exits_1_when_every_source_fails(environment, capsys):
+    """A pass in which no source delivered anything is a runtime failure, not a success."""
+    environment.setenv("DATABASE_URL", URL)
+    install_collection(
+        environment,
+        {"rss": BrokenCollector(), "congressional_trades": BrokenCollector("api down")},
+    )
+
+    assert main(["collect"]) == 1
 
     error = capsys.readouterr().err
-    assert "NEWSAPI_KEY" in error
+    assert "every source failed" in error
     assert "Traceback" not in error
 
 
@@ -268,7 +401,7 @@ def test_init_db_rolls_back_when_the_schema_fails(environment):
 
 
 def test_collect_once_stores_what_the_collectors_return(environment):
-    """Every asset is collected from every source, and every post is handed to the store."""
+    """Every asset is collected from every configured source, and every post is stored."""
     assets = ["first", "second"]
     posts = [object(), object()]
     saved = []
@@ -290,7 +423,7 @@ def test_collect_once_stores_what_the_collectors_return(environment):
 
     class FakeStore:
         def __init__(self, settings, *, keyword_tracker):
-            assert settings is SETTINGS
+            assert settings is KEYED_SETTINGS
             assert keyword_tracker is not None
 
         def save(self, collected):
@@ -300,7 +433,7 @@ def test_collect_once_stores_what_the_collectors_return(environment):
     class FakeRegistry:
         def create_all(self, names, settings):
             assert names == ("rss", "newsapi", "finnhub", "alphavantage", "congressional_trades")
-            assert settings is SETTINGS
+            assert settings is KEYED_SETTINGS
             return {"rss": FakeCollector(posts), "newsapi": FakeCollector([])}
 
     environment.setattr("newstrading.cli.build_registry", lambda settings: FakeRegistry())
@@ -308,7 +441,7 @@ def test_collect_once_stores_what_the_collectors_return(environment):
     environment.setattr("newstrading.cli.PostStore", FakeStore)
     environment.setattr("newstrading.cli.KeywordTracker", lambda settings: object())
 
-    assert collect_once(SETTINGS) == 4
+    assert collect_once(KEYED_SETTINGS) == 4
     assert saved == [2, 0, 2, 0]
 
 

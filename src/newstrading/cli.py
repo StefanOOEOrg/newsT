@@ -182,8 +182,27 @@ def _schema_file() -> Path:
     raise ConfigError("sql/schema.sql not found; run the command from the repository root")
 
 
+_UNKEYED_SOURCES: tuple[str, ...] = ("rss", "congressional_trades")
+_KEYED_SOURCES: tuple[tuple[str, str], ...] = (
+    ("newsapi", "newsapi_key"),
+    ("finnhub", "finnhub_api_key"),
+    ("alphavantage", "alphavantage_api_key"),
+)
+
+
+def _configured_sources(settings: Settings) -> tuple[str, ...]:
+    """Return the sources ``collect`` builds: the keyless ones plus every keyed one with a key."""
+    enabled = {*_UNKEYED_SOURCES}
+    enabled.update(name for name, field in _KEYED_SOURCES if getattr(settings, field))
+    return tuple(name for name in SOURCE_NAMES if name in enabled)
+
+
 def collect_once(settings: Settings) -> int:
-    """Run one collection pass over every source and store what came back.
+    """Run one collection pass over every configured source and store what came back.
+
+    ``rss`` and ``congressional_trades`` need no key and always run; ``newsapi``,
+    ``finnhub`` and ``alphavantage`` run only when their key is set. A failing source is
+    logged with its name and does not stop the others.
 
     Args:
         settings: Settings handed to the registry, the store and the collectors.
@@ -192,16 +211,30 @@ def collect_once(settings: Settings) -> int:
         The number of posts that were new.
 
     Raises:
-        CollectorError: When a collector cannot be built — a missing API key is a
-            configuration error, not a skipped source.
+        CollectorError: When a collector cannot be built — a missing API key of a
+            configured source is a configuration error, not a skipped source.
+        NewsTradingError: When the pass ran and every source failed.
     """
     registry = build_registry(settings)
-    collectors = registry.create_all(SOURCE_NAMES, settings)
+    collectors = registry.create_all(_configured_sources(settings), settings)
     store = PostStore(settings, keyword_tracker=KeywordTracker(settings))
     stored = 0
+    attempted = 0
+    succeeded = 0
     for asset in AssetStore(settings).list_for_collection():
-        for collector in collectors.values():
-            stored += store.save(collector.collect_for_asset(asset))
+        for name, collector in collectors.items():
+            attempted += 1
+            try:
+                stored += store.save(collector.collect_for_asset(asset))
+            # boundary: one broken source must not abort the pass over the others
+            except Exception:
+                logger.exception(
+                    "source %s failed for asset %s", name, getattr(asset, "name", asset)
+                )
+            else:
+                succeeded += 1
+    if attempted and not succeeded:
+        raise NewsTradingError(f"every source failed: {', '.join(collectors)}")
     return stored
 
 
