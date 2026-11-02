@@ -96,10 +96,10 @@ def test_the_legacy_seed_name_is_repaired_idempotently(legacy, current):
     assert statement in schema_text()
 
 
-def test_the_repairs_run_after_both_seed_statements():
-    """``init-db`` seeds first, then renames what a database created before this holds."""
+def test_the_repairs_run_before_the_seed_statements():
+    """A legacy row is renamed first, so the seed then hits ``ON CONFLICT DO NOTHING``."""
     text = schema_text()
-    last_seed = text.rindex("INSERT INTO rate_limit_config")
+    first_seed = text.index("INSERT INTO rate_limit_config")
 
     for legacy, _current in RENAMES:
-        assert text.index(f"WHERE collector_name = '{legacy}'") > last_seed
+        assert text.index(f"WHERE collector_name = '{legacy}'") < first_seed

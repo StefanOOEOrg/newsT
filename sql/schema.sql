@@ -482,6 +482,32 @@ CREATE TABLE IF NOT EXISTS rate_limit_config (
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
+-- Repair the quota rows of a database created before the rows were keyed by source name.
+-- These UPDATEs must run *before* the seeds below: on an old database the seed would
+-- otherwise insert the new row first, the ``NOT EXISTS`` guard would then be false and the
+-- legacy class row would stay behind as a dead duplicate. Renaming first lets the seed hit
+-- ``ON CONFLICT DO NOTHING``. ``collector_name`` is UNIQUE, so the guard is also what makes
+-- a second ``init-db`` run a no-op instead of a duplicate-key error.
+UPDATE rate_limit_config SET collector_name = 'newsapi'
+WHERE collector_name = 'NewsAPICollector'
+  AND NOT EXISTS (SELECT 1 FROM rate_limit_config WHERE collector_name = 'newsapi');
+
+UPDATE rate_limit_config SET collector_name = 'finnhub'
+WHERE collector_name = 'FinnhubCollector'
+  AND NOT EXISTS (SELECT 1 FROM rate_limit_config WHERE collector_name = 'finnhub');
+
+UPDATE rate_limit_config SET collector_name = 'alphavantage'
+WHERE collector_name = 'AlphaVantageCollector'
+  AND NOT EXISTS (SELECT 1 FROM rate_limit_config WHERE collector_name = 'alphavantage');
+
+UPDATE rate_limit_config SET collector_name = 'rss'
+WHERE collector_name = 'RSSCollector'
+  AND NOT EXISTS (SELECT 1 FROM rate_limit_config WHERE collector_name = 'rss');
+
+UPDATE rate_limit_config SET collector_name = 'congressional_trades'
+WHERE collector_name = 'CongressionalTradesCollector'
+  AND NOT EXISTS (SELECT 1 FROM rate_limit_config WHERE collector_name = 'congressional_trades');
+
 -- Insert default rate limit configurations
 -- The names are the source keys the collectors report (and write into ``posts.source``),
 -- not their class names: ``check_rate_limit`` treats an unknown name as "no limit".
@@ -513,30 +539,6 @@ INSERT INTO rate_limit_config (
     true,
     'Fetches stock prices from Yahoo Finance. Updates every 5 minutes during market hours.'
 ) ON CONFLICT (collector_name) DO NOTHING;
-
--- Repair the quota rows of a database created before the rows were keyed by source name.
--- The seeds above keep the new row when it is missing; these UPDATEs rename the old one.
--- ``collector_name`` is UNIQUE, so the NOT EXISTS guard is what makes a second ``init-db``
--- run a no-op instead of a duplicate-key error when both rows already exist.
-UPDATE rate_limit_config SET collector_name = 'newsapi'
-WHERE collector_name = 'NewsAPICollector'
-  AND NOT EXISTS (SELECT 1 FROM rate_limit_config WHERE collector_name = 'newsapi');
-
-UPDATE rate_limit_config SET collector_name = 'finnhub'
-WHERE collector_name = 'FinnhubCollector'
-  AND NOT EXISTS (SELECT 1 FROM rate_limit_config WHERE collector_name = 'finnhub');
-
-UPDATE rate_limit_config SET collector_name = 'alphavantage'
-WHERE collector_name = 'AlphaVantageCollector'
-  AND NOT EXISTS (SELECT 1 FROM rate_limit_config WHERE collector_name = 'alphavantage');
-
-UPDATE rate_limit_config SET collector_name = 'rss'
-WHERE collector_name = 'RSSCollector'
-  AND NOT EXISTS (SELECT 1 FROM rate_limit_config WHERE collector_name = 'rss');
-
-UPDATE rate_limit_config SET collector_name = 'congressional_trades'
-WHERE collector_name = 'CongressionalTradesCollector'
-  AND NOT EXISTS (SELECT 1 FROM rate_limit_config WHERE collector_name = 'congressional_trades');
 
 -- View for API usage stats
 CREATE OR REPLACE VIEW api_usage_stats AS
