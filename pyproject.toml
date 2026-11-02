@@ -5,6 +5,7 @@ description = "News and congressional trading signal monitor"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "anthropic>=0.125,<1",
     "apscheduler>=3.10,<4",
