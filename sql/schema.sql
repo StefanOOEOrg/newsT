@@ -187,11 +187,11 @@ CREATE TABLE IF NOT EXISTS alert_performance (
 );
 
 -- Indexes for performance
-CREATE INDEX idx_alert_performance_alert_id ON alert_performance(alert_id);
-CREATE INDEX idx_alert_performance_asset_id ON alert_performance(asset_id);
-CREATE INDEX idx_alert_performance_alert_type ON alert_performance(alert_type);
-CREATE INDEX idx_alert_performance_alert_date ON alert_performance(alert_date);
-CREATE INDEX idx_alert_performance_confidence ON alert_performance(confidence_score);
+CREATE INDEX IF NOT EXISTS idx_alert_performance_alert_id ON alert_performance(alert_id);
+CREATE INDEX IF NOT EXISTS idx_alert_performance_asset_id ON alert_performance(asset_id);
+CREATE INDEX IF NOT EXISTS idx_alert_performance_alert_type ON alert_performance(alert_type);
+CREATE INDEX IF NOT EXISTS idx_alert_performance_alert_date ON alert_performance(alert_date);
+CREATE INDEX IF NOT EXISTS idx_alert_performance_confidence ON alert_performance(confidence_score);
 
 -- Comments
 COMMENT ON TABLE alert_performance IS 'Tracks stock price movements after alerts for backtesting and validation';
@@ -483,13 +483,15 @@ CREATE TABLE IF NOT EXISTS rate_limit_config (
 );
 
 -- Insert default rate limit configurations
+-- The names are the source keys the collectors report (and write into ``posts.source``),
+-- not their class names: ``check_rate_limit`` treats an unknown name as "no limit".
 INSERT INTO rate_limit_config (collector_name, max_calls_per_day, max_calls_per_hour, max_calls_per_minute, min_interval_seconds, notes)
 VALUES
-    ('NewsAPICollector', 100, NULL, NULL, 1, 'Free tier: 100 requests/day'),
-    ('FinnhubCollector', NULL, NULL, 60, 1, 'Free tier: 60 calls/minute'),
-    ('AlphaVantageCollector', 25, 5, NULL, 12, 'Free tier: 25 calls/day, 5 per minute recommended'),
-    ('RSSCollector', NULL, NULL, NULL, 10, 'No hard limit, but respect servers'),
-    ('CongressionalTradesCollector', NULL, NULL, NULL, 60, 'No hard limit, fetch once per minute')
+    ('newsapi', 100, NULL, NULL, 1, 'Free tier: 100 requests/day'),
+    ('finnhub', NULL, NULL, 60, 1, 'Free tier: 60 calls/minute'),
+    ('alphavantage', 25, 5, NULL, 12, 'Free tier: 25 calls/day, 5 per minute recommended'),
+    ('rss', NULL, NULL, NULL, 10, 'No hard limit, but respect servers'),
+    ('congressional_trades', NULL, NULL, NULL, 60, 'No hard limit, fetch once per minute')
 ON CONFLICT (collector_name) DO NOTHING;
 
 -- Rate limiting configuration for StockPriceCollector
@@ -511,6 +513,30 @@ INSERT INTO rate_limit_config (
     true,
     'Fetches stock prices from Yahoo Finance. Updates every 5 minutes during market hours.'
 ) ON CONFLICT (collector_name) DO NOTHING;
+
+-- Repair the quota rows of a database created before the rows were keyed by source name.
+-- The seeds above keep the new row when it is missing; these UPDATEs rename the old one.
+-- ``collector_name`` is UNIQUE, so the NOT EXISTS guard is what makes a second ``init-db``
+-- run a no-op instead of a duplicate-key error when both rows already exist.
+UPDATE rate_limit_config SET collector_name = 'newsapi'
+WHERE collector_name = 'NewsAPICollector'
+  AND NOT EXISTS (SELECT 1 FROM rate_limit_config WHERE collector_name = 'newsapi');
+
+UPDATE rate_limit_config SET collector_name = 'finnhub'
+WHERE collector_name = 'FinnhubCollector'
+  AND NOT EXISTS (SELECT 1 FROM rate_limit_config WHERE collector_name = 'finnhub');
+
+UPDATE rate_limit_config SET collector_name = 'alphavantage'
+WHERE collector_name = 'AlphaVantageCollector'
+  AND NOT EXISTS (SELECT 1 FROM rate_limit_config WHERE collector_name = 'alphavantage');
+
+UPDATE rate_limit_config SET collector_name = 'rss'
+WHERE collector_name = 'RSSCollector'
+  AND NOT EXISTS (SELECT 1 FROM rate_limit_config WHERE collector_name = 'rss');
+
+UPDATE rate_limit_config SET collector_name = 'congressional_trades'
+WHERE collector_name = 'CongressionalTradesCollector'
+  AND NOT EXISTS (SELECT 1 FROM rate_limit_config WHERE collector_name = 'congressional_trades');
 
 -- View for API usage stats
 CREATE OR REPLACE VIEW api_usage_stats AS
