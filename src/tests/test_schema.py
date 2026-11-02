@@ -73,6 +73,17 @@ def seeded_rate_limit_names() -> list[str]:
     return re.findall(r"^\s*\('([a-z_]+)'", block, flags=re.MULTILINE)
 
 
+def insert_blocks() -> list[str]:
+    """Return the text of each ``INSERT INTO`` block, from the keyword to the next insert."""
+    text = schema_text()
+    starts = [match.start() for match in re.finditer("INSERT INTO", text)]
+
+    return [
+        text[start : starts[index + 1] if index + 1 < len(starts) else len(text)]
+        for index, start in enumerate(starts)
+    ]
+
+
 @pytest.mark.parametrize("name", REQUIRED_OBJECTS)
 def test_schema_defines_every_object_the_code_uses(name):
     """Each object the code queries must exist in the one schema file."""
@@ -121,6 +132,34 @@ def test_the_repairs_run_before_the_seed_statements():
 
     for legacy, _current in RENAMES:
         assert text.index(f"WHERE collector_name = '{legacy}'") < first_seed
+
+
+def test_every_insert_can_run_against_a_populated_database():
+    """``init-db`` applies this file again: no seed insert may fail or duplicate rows."""
+    blocks = insert_blocks()
+
+    assert len(blocks) == 3, "every seed insert has to be checked"
+    for block in blocks:
+        compact = " ".join(block.split())
+        assert "ON CONFLICT" in compact or "NOT EXISTS" in compact, compact[:120]
+
+
+def test_the_notification_settings_seed_survives_a_second_run():
+    """The single settings row is keyed by its primary key, so a second run keeps it."""
+    block = next(
+        block for block in insert_blocks() if block.startswith("INSERT INTO notification_settings")
+    )
+
+    assert "ON CONFLICT (id) DO NOTHING" in " ".join(block.split())
+
+
+def test_the_asset_seed_is_guarded_by_not_exists():
+    """``asset`` has no unique key on ``ticker``; the seed guards the rows instead."""
+    block = next(block for block in insert_blocks() if block.startswith("INSERT INTO asset "))
+    compact = " ".join(block.split())
+
+    assert "FROM (VALUES" in compact
+    assert "WHERE NOT EXISTS (SELECT 1 FROM asset a WHERE a.ticker = seed.ticker)" in compact
 
 
 def test_the_schema_never_drops_a_table():

@@ -338,10 +338,15 @@ CREATE INDEX IF NOT EXISTS idx_system_logs_service ON system_logs(service);
 -- ==============================================================================
 
 -- Insert sample assets for testing
-INSERT INTO asset (name, ticker, search_keywords) VALUES
-('Genpact', 'G', ARRAY['genpact', 'hiring', 'job opening']),
-('Palantir', 'PLTR', ARRAY['palantir', 'pltr']),
-('Snowflake', 'SNOW', ARRAY['snowflake', 'snow']);
+-- ``asset`` has no unique key on ``ticker`` (an old database may violate one), so the seed
+-- guards every row instead: a second ``init-db`` neither fails nor duplicates them.
+INSERT INTO asset (name, ticker, search_keywords)
+SELECT * FROM (VALUES
+    ('Genpact', 'G', ARRAY['genpact', 'hiring', 'job opening']),
+    ('Palantir', 'PLTR', ARRAY['palantir', 'pltr']),
+    ('Snowflake', 'SNOW', ARRAY['snowflake', 'snow'])
+) AS seed(name, ticker, keywords)
+WHERE NOT EXISTS (SELECT 1 FROM asset a WHERE a.ticker = seed.ticker);
 
 -- Insert default notification settings with comprehensive AI analysis prompt
 -- Includes special event detection (from migrations 002 & 003)
@@ -374,7 +379,7 @@ Focus on identifying trading signals:
 - BULLISH (long signals): hiring, partnerships, product launches, earnings beats, growth indicators, positive guidance, analyst upgrades, insider buying, market share gains
 - BEARISH (short signals): problems, layoffs, negative sentiment, downgrades, missed earnings, legal issues, regulatory risks, guidance cuts, insider selling, customer losses
 
-Return ONLY valid JSON, no other text.');
+Return ONLY valid JSON, no other text.') ON CONFLICT (id) DO NOTHING;
 
 -- ==============================================================================
 -- SECTION 8: EVENTS
