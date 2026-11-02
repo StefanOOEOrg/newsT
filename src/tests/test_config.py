@@ -27,6 +27,27 @@ def test_from_env_uses_defaults_for_absent_optionals():
     assert settings.alert_summary_max_length == 180
     assert settings.log_level == "INFO"
     assert settings.database_log_level == "INFO"
+    assert settings.newsapi_key == ""
+    assert settings.finnhub_api_key == ""
+    assert settings.alphavantage_api_key == ""
+
+
+def test_from_env_reads_the_collector_api_keys():
+    """The three key-based collectors get their credentials from the environment."""
+    env = dict(REQUIRED)
+    env.update(
+        {
+            "NEWSAPI_KEY": "newsapi-key",
+            "FINNHUB_API_KEY": "finnhub-key",
+            "ALPHAVANTAGE_API_KEY": "alpha-key",
+        }
+    )
+
+    settings = from_env(env)
+
+    assert settings.newsapi_key == "newsapi-key"
+    assert settings.finnhub_api_key == "finnhub-key"
+    assert settings.alphavantage_api_key == "alpha-key"
 
 
 def test_from_env_reads_overrides():
@@ -106,11 +127,13 @@ def test_from_env_treats_empty_optional_variable_as_default():
     env = dict(REQUIRED)
     env["MAX_TOKENS"] = ""
     env["LOG_LEVEL"] = ""
+    env["NEWSAPI_KEY"] = ""
 
     settings = from_env(env)
 
     assert settings.max_tokens == 512
     assert settings.log_level == "INFO"
+    assert settings.newsapi_key == ""
 
 
 def test_settings_is_frozen():

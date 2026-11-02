@@ -12,3 +12,7 @@ class NewsTradingError(Exception):
 
 class ConfigError(NewsTradingError):
     """Raised when the environment does not provide a usable configuration."""
+
+
+class CollectorConfigError(NewsTradingError):
+    """Raised when a collector is built without its required API key."""
