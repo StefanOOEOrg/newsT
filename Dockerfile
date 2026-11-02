@@ -8,8 +8,8 @@ WORKDIR /app
 
 COPY --from=ghcr.io/astral-sh/uv:0.12.7 /uv /usr/local/bin/uv
 
-# The wheel needs pyproject.toml, src/ and the files its metadata names.
-COPY pyproject.toml README.md LICENSE ./
+# The wheel needs pyproject.toml, VERSION, src/ and the files its metadata names.
+COPY pyproject.toml VERSION README.md LICENSE ./
 COPY src ./src
 COPY sql ./sql
 

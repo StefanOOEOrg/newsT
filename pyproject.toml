@@ -1,6 +1,6 @@
 [project]
 name = "newstrading"
-version = "0.1.0"
+dynamic = ["version"]
 description = "News and congressional trading signal monitor"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -30,6 +30,12 @@ newstrading = "newstrading.cli:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# The version lives in VERSION only; the wheel, the package metadata and the
+# ``newstrading --version`` output all read it from there.
+[tool.hatch.version]
+path = "VERSION"
+pattern = "^(?P<version>\\d+\\.\\d+\\.\\d+)$"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/newstrading"]

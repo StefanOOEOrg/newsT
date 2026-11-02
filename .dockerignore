@@ -8,29 +8,15 @@
 .ruff_cache
 __pycache__
 *.pyc
-
-# The legacy tree is not part of the image (deleted in the release task).
-analyzer
-collector
-dashboard
-notifier
-shared
-postgres
-scripts
+dist
+build
+*.egg-info
 
 # Documentation and development files.
 docs
-tests
 ARCHITECTURE.md
 HISTORICAL_INIT.md
 IDEAS.md
 NOTIFICATIONS.md
-README.md
 Makefile
-pytest.ini
-requirements-dev.txt
-run_tests.sh
 start.sh
-test-docker.sh
-migrate.sql
-VERSION
