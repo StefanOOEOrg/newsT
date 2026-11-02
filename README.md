@@ -50,6 +50,15 @@ Set at least `DATABASE_URL` and `ANTHROPIC_API_KEY` in `.env`, then create the s
 uv run newstrading init-db
 ```
 
+`init-db` is non-destructive: it applies `sql/schema.sql`, which only creates the tables and
+indexes that are missing and keeps every row of a populated database. It is therefore safe to run
+on an existing database after an upgrade. Only the explicit `--reset` flag drops the tables
+first (`sql/reset.sql`) — that destroys all data:
+
+```bash
+uv run newstrading init-db --reset
+```
+
 ## Configuration
 
 Every variable below is read by `Settings`; nothing else is read from the environment. Required
@@ -79,15 +88,16 @@ collector runs exactly when its key is set.
 ## Commands
 
 ```bash
-uv run newstrading init-db   # apply the schema to the configured database
-uv run newstrading collect   # one collection pass over every configured source
-uv run newstrading analyze   # one analysis pass over the waiting posts
-uv run newstrading notify    # one notification pass over the alerts
+uv run newstrading init-db           # create the missing tables, keep the existing rows
+uv run newstrading init-db --reset   # drop every table first (destroys all data)
+uv run newstrading collect           # one collection pass over every configured source
+uv run newstrading analyze           # one analysis pass over the waiting posts
+uv run newstrading notify            # one notification pass over the alerts
 ```
 
 | Command | Needs | Does |
 |---|---|---|
-| `init-db` | `DATABASE_URL` | applies `sql/schema.sql` to the database |
+| `init-db` | `DATABASE_URL` | creates the missing tables and indexes of `sql/schema.sql`; non-destructive, `--reset` drops the tables first (see `sql/reset.sql`) |
 | `collect` | `DATABASE_URL` | runs every configured source for every asset, stores the new posts |
 | `analyze` | `DATABASE_URL`, `ANTHROPIC_API_KEY` | analyses the waiting posts, stores the alerts, refreshes the daily metrics |
 | `notify` | `DATABASE_URL` | sends the pending notifications over the configured channels |

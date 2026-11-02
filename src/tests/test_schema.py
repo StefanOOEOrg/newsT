@@ -15,6 +15,21 @@ from newstrading.collectors import (
 )
 
 SCHEMA = Path(__file__).resolve().parents[2] / "sql" / "schema.sql"
+RESET = Path(__file__).resolve().parents[2] / "sql" / "reset.sql"
+
+# The tables ``init-db`` used to drop on every run, in the order of the schema file.
+DROPPED_TABLES = (
+    "asset",
+    "social_posts",
+    "ai_analysis",
+    "daily_metrics",
+    "keyword_performance",
+    "alerts",
+    "alert_notification_preferences",
+    "notification_log",
+    "notification_settings",
+    "system_logs",
+)
 
 REQUIRED_OBJECTS = [
     "alert_performance",
@@ -106,3 +121,24 @@ def test_the_repairs_run_before_the_seed_statements():
 
     for legacy, _current in RENAMES:
         assert text.index(f"WHERE collector_name = '{legacy}'") < first_seed
+
+
+def test_the_schema_never_drops_a_table():
+    """``init-db`` applies this file to a populated database: it must not destroy data."""
+    assert "drop" not in schema_text().lower()
+
+
+def test_every_create_carries_if_not_exists():
+    """Every statement of the schema can run a second time without an error."""
+    assert re.findall(r"CREATE (?:TABLE|INDEX)(?! IF NOT EXISTS)", schema_text()) == []
+
+
+def test_the_reset_script_drops_exactly_the_ten_tables():
+    """The destructive half is its own file, and it only drops what the schema creates."""
+    body = [
+        line.strip()
+        for line in RESET.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("--")
+    ]
+
+    assert body == [f"DROP TABLE IF EXISTS {table} CASCADE;" for table in DROPPED_TABLES]
