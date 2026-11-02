@@ -1,1 +1,0 @@
-"""Pages module for dashboard."""
