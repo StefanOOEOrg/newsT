@@ -262,18 +262,22 @@ def analyze_pending(settings: Settings) -> int:
             update raises; :func:`main` maps it to an exit code.
     """
     generator = AlertGenerator(settings)
-    analyzer = _analyzer(settings, on_analysis=generator.generate)
+    analyzer = _analyzer(
+        settings,
+        on_analysis=lambda analysis, asset_id: generator.generate(analysis, asset_id),
+    )
     handled = analyzer.analyze_pending()
     update_daily_metrics(settings)
     return handled
 
 
-def _analyzer(settings: Settings, on_analysis: Callable[[Analysis], Any]) -> Any:
+def _analyzer(settings: Settings, on_analysis: Callable[[Analysis, int], Any]) -> Any:
     """Build the analyzer of the analysis service for one ``analyze`` run.
 
     Args:
         settings: Settings the analyzer, its prompt builder and the model call read.
-        on_analysis: Called with every analysis the run stores.
+        on_analysis: Called with every analysis the run stores and the ``asset_id`` it
+            was stored for.
 
     Returns:
         The analyzer; its ``analyze_pending`` runs one batch.

@@ -6,11 +6,9 @@ expectation here is the legacy one: the thresholds are strict (a score of exactl
 thresholds, a long signal needs a bullish category, and the description strings are
 copied verbatim. No database is involved — a fake connection records the statements.
 
-``parser.Analysis`` carries no asset id, so the tests build :class:`StoredAnalysis`, the
-subclass the analyzer's ``on_analysis`` callback has to pass (open question of #38).
+``parser.Analysis`` carries no asset id, so every test passes the id of the ``asset`` row
+the analysis was stored for to :meth:`AlertGenerator.generate` explicitly.
 """
-
-from dataclasses import dataclass
 
 import pytest
 
@@ -31,16 +29,9 @@ ASSET_ID = 7
 SUMMARY = "A short summary of the post."
 
 
-@dataclass(frozen=True)
-class StoredAnalysis(Analysis):
-    """An analysis plus the asset it was stored for (the seam #38 still needs)."""
-
-    asset_id: int = ASSET_ID
-
-
 def analysis(sentiment_score=0.0, category="Other", summary=SUMMARY, events=()):
-    """Build a stored analysis of :data:`ASSET_ID`."""
-    return StoredAnalysis(
+    """Build an analysis of :data:`ASSET_ID`."""
+    return Analysis(
         sentiment="neutral",
         sentiment_score=sentiment_score,
         category=category,
@@ -125,7 +116,7 @@ def test_the_short_signal_bands_are_the_legacy_ones(score, severity, prefix):
     """Each band of a non-``Problems`` short signal, boundaries included."""
     generator, connection = make_generator()
 
-    written = generator.generate(analysis(score))
+    written = generator.generate(analysis(score), ASSET_ID)
 
     if severity is None:
         assert written == 0
@@ -156,7 +147,7 @@ def test_problems_shifts_the_short_signal_bands(score, severity, prefix):
     """``Problems`` reaches ``medium`` at -0.4 and ``high`` at -0.5, not before."""
     generator, connection = make_generator()
 
-    generator.generate(analysis(score, category="Problems"))
+    generator.generate(analysis(score, category="Problems"), ASSET_ID)
 
     assert inserted(connection) == [
         (
@@ -174,8 +165,8 @@ def test_problems_is_more_sensitive_than_the_general_short_signal_band():
     general, general_connection = make_generator()
     problems, problems_connection = make_generator()
 
-    general.generate(analysis(-0.41, category="Other"))
-    problems.generate(analysis(-0.41, category="Problems"))
+    general.generate(analysis(-0.41, category="Other"), ASSET_ID)
+    problems.generate(analysis(-0.41, category="Problems"), ASSET_ID)
 
     assert inserted(general_connection)[0][2] == "low"
     assert inserted(problems_connection)[0][2] == "medium"
@@ -196,7 +187,7 @@ def test_the_long_signal_bands_are_the_legacy_ones(score, severity, prefix):
     """Each band of a long signal in a bullish category, boundaries included."""
     generator, connection = make_generator()
 
-    written = generator.generate(analysis(score, category="Product"))
+    written = generator.generate(analysis(score, category="Product"), ASSET_ID)
 
     if severity is None:
         assert written == 0
@@ -219,9 +210,9 @@ def test_a_long_signal_needs_both_the_threshold_and_a_bullish_category():
     legal, legal_connection = make_generator()
     problems, problems_connection = make_generator()
 
-    assert bullish.generate(analysis(0.8, category="Product")) == 1
-    assert legal.generate(analysis(0.8, category="Legal")) == 0
-    assert problems.generate(analysis(0.8, category="Problems")) == 0
+    assert bullish.generate(analysis(0.8, category="Product"), ASSET_ID) == 1
+    assert legal.generate(analysis(0.8, category="Legal"), ASSET_ID) == 0
+    assert problems.generate(analysis(0.8, category="Problems"), ASSET_ID) == 0
 
     assert inserted(bullish_connection)[0][1] == "long_signal"
     assert inserted(legal_connection) == []
@@ -233,7 +224,7 @@ def test_an_analysis_can_warrant_a_short_signal_and_events_together():
     generator, connection = make_generator()
     stored = analysis(-0.6, events=("partnership_announced", "guidance_cut"))
 
-    assert generator.generate(stored) == 3
+    assert generator.generate(stored, ASSET_ID) == 3
 
     assert [parameters[1] for parameters in inserted(connection)] == [
         "short_signal",
@@ -247,7 +238,12 @@ def test_special_events_produce_one_alert_each_with_the_legacy_type_and_descript
     """Two events become two alerts with the legacy display names and severities."""
     generator, connection = make_generator()
 
-    assert generator.generate(analysis(0.2, events=("partnership_announced", "guidance_cut"))) == 2
+    assert (
+        generator.generate(
+            analysis(0.2, events=("partnership_announced", "guidance_cut")), ASSET_ID
+        )
+        == 2
+    )
 
     assert inserted(connection) == [
         (
@@ -271,7 +267,7 @@ def test_no_special_events_produce_no_event_alert():
     """An empty event list is no alert, not an alert with an empty type."""
     generator, connection = make_generator()
 
-    assert generator.generate(analysis(0.2, events=())) == 0
+    assert generator.generate(analysis(0.2, events=()), ASSET_ID) == 0
 
     assert inserted(connection) == []
     assert connection.commits == 1
@@ -294,7 +290,7 @@ def test_an_event_raises_its_severity_with_a_strong_sentiment(
     """The legacy adjustment of an event's severity and confidence."""
     generator, connection = make_generator()
 
-    generator.generate(analysis(score, events=(event,)))
+    generator.generate(analysis(score, events=(event,)), ASSET_ID)
 
     event_alert = next(
         parameters for parameters in inserted(connection) if parameters[1] != "short_signal"
@@ -308,7 +304,7 @@ def test_an_unknown_special_event_is_skipped():
     """A type the legacy table does not know is logged and produces no alert."""
     generator, connection = make_generator()
 
-    assert generator.generate(analysis(0.2, events=("not_a_type",))) == 0
+    assert generator.generate(analysis(0.2, events=("not_a_type",)), ASSET_ID) == 0
 
     assert inserted(connection) == []
 
@@ -318,7 +314,7 @@ def test_a_signal_description_carries_at_most_the_summary_limit():
     generator, connection = make_generator()
     long_summary = "x" * (ALERT_SUMMARY_MAX_LENGTH + 50)
 
-    generator.generate(analysis(-0.8, summary=long_summary))
+    generator.generate(analysis(-0.8, summary=long_summary), ASSET_ID)
 
     description = inserted(connection)[0][3]
     assert description.endswith("x" * ALERT_SUMMARY_MAX_LENGTH)
@@ -332,7 +328,9 @@ def test_an_event_description_carries_the_legacy_fifty_extra_characters():
     generator, connection = make_generator()
     long_summary = "y" * (EVENT_DESCRIPTION_MAX_LENGTH + 50)
 
-    generator.generate(analysis(0.2, summary=long_summary, events=("partnership_announced",)))
+    generator.generate(
+        analysis(0.2, summary=long_summary, events=("partnership_announced",)), ASSET_ID
+    )
 
     description = inserted(connection)[0][3]
     assert len(description) == EVENT_DESCRIPTION_MAX_LENGTH
@@ -344,15 +342,15 @@ def test_a_database_error_rolls_back_and_raises_the_named_error():
     generator, connection = make_generator(fail_on="INSERT INTO alerts")
 
     with pytest.raises(AlertError):
-        generator.generate(analysis(-0.8, events=("product_launch",)))
+        generator.generate(analysis(-0.8, events=("product_launch",)), ASSET_ID)
 
     assert connection.rollbacks == 1
     assert connection.commits == 0
     assert connection.closes == 1
 
 
-def test_an_analysis_without_an_asset_id_is_refused():
-    """A row nobody could deliver is not written: the callback must name the asset."""
+def test_a_non_positive_asset_id_is_refused():
+    """A row nobody could deliver is not written: the caller must name a real asset."""
     opened = []
 
     def connector(database_url):
@@ -362,14 +360,6 @@ def test_an_analysis_without_an_asset_id_is_refused():
     generator = AlertGenerator(SETTINGS, connector=connector)
 
     with pytest.raises(AlertError, match="asset_id"):
-        generator.generate(
-            Analysis(
-                sentiment="neutral",
-                sentiment_score=0.0,
-                category="Other",
-                key_topics=(),
-                summary=SUMMARY,
-            )
-        )
+        generator.generate(analysis(-0.8), 0)
 
     assert opened == []

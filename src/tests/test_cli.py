@@ -276,8 +276,10 @@ def test_analyze_generates_alerts_per_analysis_and_updates_the_metrics_once(envi
     environment.setenv("DATABASE_URL", URL)
     environment.setenv("ANTHROPIC_API_KEY", "sk-test")
     analyses = [object(), object()]
+    asset_id = 7
     order = []
     built = {}
+    handled = []
 
     class FakeAnalyzer:
         def __init__(self, settings, *, complete, on_analysis):
@@ -288,7 +290,7 @@ def test_analyze_generates_alerts_per_analysis_and_updates_the_metrics_once(envi
         def analyze_pending(self, limit=20):
             built["limit"] = limit
             for analysis in analyses:
-                self.on_analysis(analysis)
+                self.on_analysis(analysis, asset_id)
             order.append("analyzed")
             return len(analyses)
 
@@ -303,8 +305,9 @@ def test_analyze_generates_alerts_per_analysis_and_updates_the_metrics_once(envi
             self.settings = settings
             generated.append(self)
 
-        def generate(self, analysis):
+        def generate(self, analysis, alert_asset_id):
             order.append(analysis)
+            handled.append(alert_asset_id)
             return 1
 
     environment.setattr("newstrading.cli.AlertGenerator", FakeGenerator)
@@ -324,7 +327,9 @@ def test_analyze_generates_alerts_per_analysis_and_updates_the_metrics_once(envi
     assert order == ["analyzer", *analyses, "analyzed", "metrics"]
     assert len(generated) == 1
     assert generated[0].settings == built["settings"]
-    assert built["on_analysis"] == generated[0].generate
+    assert handled == [asset_id, asset_id]
+    built["on_analysis"](analyses[0], asset_id)
+    assert handled == [asset_id, asset_id, asset_id]
     assert built["complete"] == "model-call"
     assert built["limit"] == 20
     assert metrics == [built["settings"]]

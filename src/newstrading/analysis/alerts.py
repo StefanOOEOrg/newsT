@@ -141,20 +141,21 @@ class AlertGenerator:
         self._settings = settings
         self._connector = connector
 
-    def generate(self, analysis: Analysis) -> int:
-        """Insert the alerts one analysis warrants; return how many rows were written.
+    def generate(self, analysis: Analysis, asset_id: int) -> int:
+        """Insert the alerts one analysis warrants for ``asset_id``; return the rows written.
 
         Args:
-            analysis: The stored analysis to act on. It must carry the ``asset_id`` it
-                was stored for; ``parser.Analysis`` has no such field, so the analyzer's
-                ``on_analysis`` callback has to supply one (open question of #38).
+            analysis: The stored analysis to act on; ``parser.Analysis`` carries no
+                asset id, so the caller names the asset it was stored for.
+            asset_id: The ``asset`` row the analysis belongs to, from the post row the
+                analyzer already has.
 
         Returns:
             The number of alerts written: none for a neutral analysis in an ``Other``
             category without special events.
 
         Raises:
-            AlertError: If the analysis carries no asset id, or if the rows cannot be
+            AlertError: If ``asset_id`` is not a positive id, or if the rows cannot be
                 stored. A failed write rolls the whole call back.
 
         Contract:
@@ -162,7 +163,7 @@ class AlertGenerator:
             * One connection per call, one commit at the end, closed in every case.
             * The SQL and the description strings are the legacy ones.
         """
-        alerts = _alerts_for(analysis)
+        alerts = _alerts_for(analysis, asset_id)
         try:
             with connection(self._settings, connector=self._connector) as db:
                 with db.cursor() as cursor:
@@ -183,19 +184,20 @@ class AlertGenerator:
         return len(alerts)
 
 
-def _alerts_for(analysis: Analysis) -> list[Alert]:
-    """Build every alert ``analysis`` warrants, in the legacy order.
+def _alerts_for(analysis: Analysis, asset_id: int) -> list[Alert]:
+    """Build every alert ``analysis`` warrants for ``asset_id``, in the legacy order.
 
     Args:
-        analysis: The analysis to act on, carrying its ``asset_id``.
+        analysis: The analysis to act on.
+        asset_id: Asset the alerts belong to.
 
     Returns:
         The short signal, then the long signal, then one alert per known event.
 
     Raises:
-        AlertError: If the analysis carries no asset id.
+        AlertError: If ``asset_id`` is not a positive id.
     """
-    asset_id = _asset_id(analysis)
+    asset_id = _checked_asset_id(asset_id)
     alerts = []
     short_signal = _short_signal(asset_id, analysis)
     if short_signal is not None:
@@ -207,26 +209,21 @@ def _alerts_for(analysis: Analysis) -> list[Alert]:
     return alerts
 
 
-def _asset_id(analysis: Analysis) -> int:
-    """Return the asset the analysis belongs to.
+def _checked_asset_id(asset_id: int) -> int:
+    """Return the asset the alerts belong to, refusing an impossible row id.
 
     Args:
-        analysis: The analysis to act on.
+        asset_id: The id the caller took from the post row.
 
     Returns:
-        Its ``asset_id``.
+        It as an ``int``.
 
     Raises:
-        AlertError: If the analysis carries no asset id. The notification pass joins
-            ``asset`` on ``alerts.asset_id``, so a row without one would never be
-            delivered — refusing it is better than storing it.
+        AlertError: If the id is not positive. The notification pass joins ``asset`` on
+            ``alerts.asset_id``, so a row without a real asset would never be delivered.
     """
-    asset_id = getattr(analysis, "asset_id", None)
-    if asset_id is None:
-        raise AlertError(
-            "the analysis carries no asset_id; the on_analysis callback of the analyzer "
-            "must pass an analysis that names the asset it was stored for (#38)"
-        )
+    if asset_id is None or int(asset_id) <= 0:
+        raise AlertError(f"the analysis needs a positive asset_id, got {asset_id!r}")
     return int(asset_id)
 
 
