@@ -18,6 +18,7 @@ from anthropic import (
     RateLimitError,
 )
 
+from newstrading.analysis.parser import Analysis
 from newstrading.analysis.service import AnalysisError, Analyzer
 from newstrading.config import Settings
 
@@ -165,7 +166,9 @@ class FakeSleep:
         self.calls.append(seconds)
 
 
-def make_analyzer(connection, model, *, builder=None, sleep=None, settings=SETTINGS):
+def make_analyzer(
+    connection, model, *, builder=None, sleep=None, settings=SETTINGS, on_analysis=None
+):
     """Build an analyzer over the fakes; the builder defaults to a recording one."""
     return Analyzer(
         settings,
@@ -173,6 +176,7 @@ def make_analyzer(connection, model, *, builder=None, sleep=None, settings=SETTI
         complete=model,
         sleep=sleep if sleep is not None else FakeSleep(),
         builder=builder if builder is not None else FakeBuilder(),
+        on_analysis=on_analysis,
     )
 
 
@@ -414,3 +418,64 @@ def test_a_database_error_rolls_back_and_raises_a_named_error():
     assert connection.commits == 0
     assert connection.closed is True
     assert connection.inserted == []
+
+
+# --- the on_analysis seam ------------------------------------------------------------
+
+
+class FakeCallback:
+    """Callback double: records every analysis and asset id it is handed."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, analysis, asset_id):
+        self.calls.append((analysis, asset_id))
+
+
+def test_a_stored_analysis_calls_on_analysis_once_with_the_analysis_and_the_asset_id():
+    row = list(post_row(row_id=11))
+    row[1] = 42
+    connection = FakeConnection([row])
+    callback = FakeCallback()
+    analyzer = make_analyzer(connection, FakeModel(ANSWER), on_analysis=callback)
+
+    stored = analyzer.analyze_pending()
+
+    assert stored == 1
+    assert len(callback.calls) == 1
+    analysis, asset_id = callback.calls[0]
+    assert isinstance(analysis, Analysis)
+    assert (analysis.sentiment, analysis.sentiment_score) == ("positive", 0.7)
+    assert (analysis.category, analysis.key_topics) == ("Growth", ("hiring", "expansion"))
+    assert asset_id == 42
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param("I am not going to answer that.", id="parse-error"),
+        pytest.param(ValueError("bad request"), id="model-error"),
+    ],
+)
+def test_a_failing_post_does_not_call_on_analysis(answer):
+    connection = FakeConnection([post_row()])
+    callback = FakeCallback()
+    analyzer = make_analyzer(connection, FakeModel(answer), on_analysis=callback)
+
+    stored = analyzer.analyze_pending()
+
+    assert stored == 0
+    assert connection.inserted == []
+    assert callback.calls == []
+
+
+def test_on_analysis_none_stores_the_analysis_and_calls_nothing():
+    connection = FakeConnection([post_row()])
+    analyzer = make_analyzer(connection, FakeModel(ANSWER))
+
+    stored = analyzer.analyze_pending()
+
+    assert stored == 1
+    assert [row[0] for row in connection.inserted] == [1]
+    assert connection.commits == 1

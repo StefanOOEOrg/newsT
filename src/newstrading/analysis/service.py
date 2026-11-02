@@ -139,6 +139,7 @@ class Analyzer:
         complete: Complete,
         sleep: Sleep = time.sleep,
         builder: PromptBuilder | None = None,
+        on_analysis: Callable[[Analysis, int], None] | None = None,
     ) -> None:
         """Store the seams; ``complete(prompt) -> str`` returns the raw model text.
 
@@ -151,11 +152,15 @@ class Analyzer:
             builder: Prompt builder. Defaults to one that reads the template from the
                 database once per run and cuts the content to
                 ``settings.content_max_length``.
+            on_analysis: Called with every analysis the run stored and the ``asset_id``
+                it was stored for. The CLI wires the alert generator in here; ``None``
+                keeps the batch a pure store.
         """
         self._settings = settings
         self._connector = connector
         self._complete = complete
         self._sleep = sleep
+        self._on_analysis = on_analysis
         self._builder = builder or PromptBuilder(
             database_prompt_loader(settings, connector=connector),
             content_max_length=settings.content_max_length,
@@ -185,6 +190,8 @@ class Analyzer:
                         continue
                     self._store(db, row[0], analysis)
                     stored += 1
+                    if self._on_analysis is not None:
+                        self._on_analysis(analysis, row[1])
         # boundary: driver and programming failures become the analyzer's error type
         except Exception as error:
             raise AnalysisError("analysis run failed") from error

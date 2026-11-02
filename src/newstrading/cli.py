@@ -12,12 +12,17 @@ import logging
 import os
 import sys
 import traceback
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from anthropic import Anthropic
+
 from newstrading import __version__
+from newstrading.analysis.alerts import AlertGenerator
+from newstrading.analysis.metrics import update_daily_metrics
+from newstrading.analysis.parser import Analysis
 from newstrading.collectors.assets import AssetStore
 from newstrading.collectors.factories import SOURCE_NAMES, build_registry
 from newstrading.collectors.posts import PostStore
@@ -46,6 +51,7 @@ REQUIRED_VARIABLES: dict[str, tuple[str, ...]] = {
 
 _SCHEMA_PATH = ("sql", "schema.sql")
 _UNUSED_ANALYSIS_KEY = "not-configured"
+_PREFILL = "sentiment:"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -241,6 +247,10 @@ def collect_once(settings: Settings) -> int:
 def analyze_pending(settings: Settings) -> int:
     """Run one analysis pass over the posts that wait for a verdict.
 
+    The pass stores the analyses, hands each stored one to the
+    :class:`~newstrading.analysis.alerts.AlertGenerator` and refreshes ``daily_metrics``
+    once the batch is done.
+
     Args:
         settings: Settings holding the database and the model configuration.
 
@@ -248,11 +258,70 @@ def analyze_pending(settings: Settings) -> int:
         The number of posts the pass handled.
 
     Raises:
-        NewsTradingError: Until the analysis service is ported. The package has the
-            prompt builder and the parser, but no service that calls the model and writes
-            ``ai_analysis`` rows yet (open question of #22).
+        NewsTradingError: Whatever the analyzer, the alert generator or the metric
+            update raises; :func:`main` maps it to an exit code.
     """
-    raise NewsTradingError("the analysis service is not part of the package yet")
+    generator = AlertGenerator(settings)
+    analyzer = _analyzer(
+        settings,
+        on_analysis=lambda analysis, asset_id: generator.generate(analysis, asset_id),
+    )
+    handled = analyzer.analyze_pending()
+    update_daily_metrics(settings)
+    return handled
+
+
+def _analyzer(settings: Settings, on_analysis: Callable[[Analysis, int], Any]) -> Any:
+    """Build the analyzer of the analysis service for one ``analyze`` run.
+
+    Args:
+        settings: Settings the analyzer, its prompt builder and the model call read.
+        on_analysis: Called with every analysis the run stores and the ``asset_id`` it
+            was stored for.
+
+    Returns:
+        The analyzer; its ``analyze_pending`` runs one batch.
+
+    Contract:
+        The import is deferred so that ``collect``, ``notify`` and ``init-db`` never
+        load the analysis service.
+    """
+    from newstrading.analysis.service import Analyzer
+
+    return Analyzer(settings, complete=_completion(settings), on_analysis=on_analysis)
+
+
+def _completion(settings: Settings) -> Callable[[str], str]:
+    """Return the model call the analyzer uses: one prompt in, raw answer text out.
+
+    Args:
+        settings: Settings holding the model id, the token limit and the API key.
+
+    Returns:
+        A callable that sends the prompt with the legacy ``sentiment:`` prefill. An
+        empty answer becomes ``""`` — the analyzer stores its neutral analysis for it.
+        An answer that ignored the prefill and starts with JSON or a fence is returned
+        unchanged, so the parser reads what the model actually said.
+    """
+    client = Anthropic(api_key=settings.anthropic_api_key)
+
+    def complete(prompt: str) -> str:
+        message = client.messages.create(
+            model=settings.ai_model,
+            max_tokens=settings.max_tokens,
+            messages=[
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": _PREFILL},
+            ],
+        )
+        if not message.content:
+            return ""
+        text = getattr(message.content[0], "text", "")
+        if text.lstrip().startswith(("{", "```")):
+            return text
+        return _PREFILL + text
+
+    return complete
 
 
 if __name__ == "__main__":
