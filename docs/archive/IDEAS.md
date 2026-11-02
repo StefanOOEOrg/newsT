@@ -1,3 +1,6 @@
+> **Archived.** This page describes the legacy system that the 1.0.0 package replaced; its paths,
+> setup steps and components no longer exist. See the README for the current package.
+
 # Feature Ideas
 
 This document contains ideas for future features and improvements to the news trading system.
