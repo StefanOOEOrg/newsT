@@ -96,6 +96,22 @@ def test_a_non_numeric_score_is_refused():
         parse_analysis(as_json(sentiment_score="very positive"))
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        "nan",
+        "Infinity",
+        "-Infinity",
+    ],
+)
+def test_a_non_finite_score_is_refused(raw):
+    with pytest.raises(AnalysisParseError, match="sentiment_score"):
+        parse_analysis(as_json(sentiment_score=raw))
+
+
 def test_an_unknown_category_becomes_other():
     analysis = parse_analysis(as_json(category="Technology"))
 

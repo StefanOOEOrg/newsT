@@ -9,6 +9,7 @@ label costs more than mapping it.
 """
 
 import json
+import math
 from dataclasses import dataclass
 
 from newstrading.errors import NewsTradingError
@@ -84,7 +85,7 @@ def parse_analysis(text: str) -> Analysis:
         * ``sentiment`` must be one of :data:`SENTIMENTS` (compared case-insensitively
           and stripped); an unknown value raises.
         * ``sentiment_score`` may be a number or a numeric string; it is clamped into
-          ``[-1.0, 1.0]``. A non-numeric value raises.
+          ``[-1.0, 1.0]``. A non-numeric or non-finite value raises.
         * ``category`` is matched case-insensitively against :data:`CATEGORIES`;
           anything else becomes ``Other``.
         * ``key_topics`` and ``special_events`` may be a list, a comma-separated string
@@ -250,7 +251,7 @@ def _score(value: object) -> float:
         The clamped float.
 
     Raises:
-        AnalysisParseError: If ``value`` is missing, a boolean, or not numeric.
+        AnalysisParseError: If ``value`` is missing, a boolean, non-numeric or non-finite.
     """
     if isinstance(value, bool):
         raise AnalysisParseError(f"sentiment_score must be a number, got {value!r}")
@@ -258,4 +259,6 @@ def _score(value: object) -> float:
         number = float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError) as error:
         raise AnalysisParseError(f"sentiment_score must be a number, got {value!r}") from error
+    if not math.isfinite(number):
+        raise AnalysisParseError(f"sentiment_score must be finite, got {value!r}")
     return min(1.0, max(-1.0, number))
