@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 MAX_ERROR_LENGTH = 500
 ALERT_BATCH_LIMIT = 100
-FAILED_ATTEMPTS_LIMIT = 3
+UNDELIVERED_ATTEMPTS_LIMIT = 3
 
 Now = Callable[[], datetime]
 
@@ -98,10 +98,10 @@ _MARK_NOTIFIED = """
     WHERE id = %s
 """
 
-_FAILED_COUNT = """
+_UNDELIVERED_COUNT = """
     SELECT COUNT(*)
     FROM notification_log
-    WHERE alert_id = %s AND status = 'failed'
+    WHERE alert_id = %s AND status IN ('failed', 'skipped')
 """
 
 
@@ -302,18 +302,20 @@ class NotificationService:
             self._mark_notified(cursor, alert.id)
             logger.info("alert %s notified over %d channel(s)", alert.id, sent)
             return True
-        failed = self._count_failed(cursor, alert.id)
-        if failed >= FAILED_ATTEMPTS_LIMIT:
-            logger.warning("alert %s failed %d time(s), giving up on it", alert.id, failed)
+        undelivered = self._count_undelivered(cursor, alert.id)
+        if undelivered >= UNDELIVERED_ATTEMPTS_LIMIT:
+            logger.warning(
+                "alert %s undelivered %d time(s), giving up on it", alert.id, undelivered
+            )
             self._mark_notified(cursor, alert.id)
         else:
-            logger.info("alert %s failed %d time(s), retrying next run", alert.id, failed)
+            logger.info("alert %s undelivered %d time(s), retrying next run", alert.id, undelivered)
         return True
 
     @staticmethod
-    def _count_failed(cursor: Any, alert_id: int) -> int:
-        """Return how many failed delivery attempts ``notification_log`` holds for the alert."""
-        cursor.execute(_FAILED_COUNT, (alert_id,))
+    def _count_undelivered(cursor: Any, alert_id: int) -> int:
+        """Return how many failed or skipped attempts ``notification_log`` holds for the alert."""
+        cursor.execute(_UNDELIVERED_COUNT, (alert_id,))
         row = cursor.fetchone()
         return 0 if row is None else int(row[0])
 

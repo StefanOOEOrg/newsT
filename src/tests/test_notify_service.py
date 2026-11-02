@@ -120,7 +120,7 @@ class FakeCursor:
         elif "FROM alerts a" in normalized:
             self._rows = self._database.window(normalized, params)
         elif "FROM notification_log" in normalized:
-            self._rows = [(self._database.failed_count(params[0]),)]
+            self._rows = [(self._database.undelivered_count(params[0], normalized),)]
         elif "FROM alert_notification_preferences" in normalized:
             self._rows = [
                 row
@@ -185,9 +185,12 @@ class FakeDatabase:
         limit = params[0] if params else None
         return rows[:limit] if limit is not None else rows
 
-    def failed_count(self, alert_id):
-        """Return the ``failed`` rows of ``alert_id``: pre-existing plus logged ones."""
-        logged = [row for row in self.logs() if row[0] == alert_id and row[3] == "failed"]
+    def undelivered_count(self, alert_id, query):
+        """Return the log rows of ``alert_id`` that ``query`` asks for: pre-existing plus logged."""
+        statuses = {"failed"}
+        if "'skipped'" in query:
+            statuses.add("skipped")
+        logged = [row for row in self.logs() if row[0] == alert_id and row[3] in statuses]
         return self.failed + len(logged)
 
     def matching(self, fragment):
@@ -361,7 +364,7 @@ def test_a_failed_delivery_is_retried_before_the_alert_is_consumed(previous_fail
     assert handled == 1
     assert database.marked() == ([(7,)] if consumed else [])
     (count_query, params) = database.matching("FROM notification_log")[-1]
-    assert "status = 'failed'" in count_query
+    assert "status IN ('failed', 'skipped')" in count_query
     assert params == (7,)
 
 
@@ -379,6 +382,24 @@ def test_the_third_failed_run_consumes_the_alert():
 
     assert outcomes == [[], [], [(7,)]]
     assert [row[3] for row in database.logs()] == ["failed", "failed", "failed"]
+
+
+def test_a_channel_that_only_skips_is_consumed_after_three_runs():
+    """A known channel reporting a skip reason is undelivered, just like a failure."""
+    database = FakeDatabase(
+        settings=settings_row(),
+        alerts=[alert_row()],
+        preferences=[preference(channels=("email",))],
+    )
+    email = FakeSender("email", skip="smtp_password is not configured")
+
+    outcomes = []
+    for _ in range(3):
+        build(database, senders=[email]).run()
+        outcomes.append(database.marked())
+
+    assert outcomes == [[], [], [(7,)]]
+    assert [row[3] for row in database.logs()] == ["skipped", "skipped", "skipped"]
 
 
 def test_a_successful_channel_consumes_the_alert_without_counting_retries():
