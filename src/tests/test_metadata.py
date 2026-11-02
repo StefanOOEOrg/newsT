@@ -18,6 +18,18 @@ README = ROOT / "README.md"
 ENV_EXAMPLE = ROOT / ".env.example"
 VERSION = ROOT / "VERSION"
 PYPROJECT = ROOT / "pyproject.toml"
+DOCS = ROOT / "docs"
+
+# Archived documents keep the paths of the legacy tree on purpose; the release
+# moves them, so the path check skips them by name.
+ARCHIVED_DOCUMENTS = (
+    "docs/archive/HISTORICAL_INIT.md",
+    "docs/archive/IDEAS.md",
+)
+
+# Variables of the legacy notification setup; the package configures the senders
+# through the ``notification_settings`` row instead.
+LEGACY_NOTIFICATION_VARIABLES = ("NOTIFICATION_EMAIL", "SMTP_", "TWILIO_", "PUSHOVER_")
 
 # Paths of the reference implementation; the release removes them for good.
 LEGACY_PATHS = (
@@ -105,3 +117,40 @@ def test_env_example_mentions_no_path_that_does_not_exist() -> None:
     paths = _env_example_paths()
     assert paths, "the check needs at least one path to be meaningful"
     assert [path for path in paths if not (ROOT / path).exists()] == []
+
+
+def _documented_markdown() -> list[Path]:
+    """Return the current Markdown files at the root and under ``docs/``."""
+    candidates = [*ROOT.glob("*.md"), *DOCS.rglob("*.md")]
+    return [
+        path
+        for path in sorted(candidates)
+        if path.relative_to(ROOT).as_posix() not in ARCHIVED_DOCUMENTS
+    ]
+
+
+def _markdown_paths(path: Path) -> list[str]:
+    """Return the repository paths one Markdown file names, URLs aside."""
+    text = _URL.sub("", path.read_text(encoding="utf-8"))
+    return _PATH.findall(text)
+
+
+def test_every_documented_markdown_path_exists() -> None:
+    assert not (ROOT / "ARCHITECTURE.md").exists(), (
+        "the README is the single architecture description"
+    )
+    documents = _documented_markdown()
+    assert documents, "the check needs at least one document to be meaningful"
+    missing = {
+        f"{document.relative_to(ROOT).as_posix()}: {path}"
+        for document in documents
+        for path in _markdown_paths(document)
+        if not (ROOT / path).exists()
+    }
+    assert missing == set()
+
+
+def test_notifications_guide_names_no_legacy_setup() -> None:
+    text = (ROOT / "NOTIFICATIONS.md").read_text(encoding="utf-8")
+    assert [name for name in LEGACY_NOTIFICATION_VARIABLES if name in text] == []
+    assert "dashboard" not in text.lower()
