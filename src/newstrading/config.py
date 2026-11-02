@@ -35,6 +35,10 @@ class Settings:
             (``ALERT_SUMMARY_MAX_LENGTH``).
         log_level: Console log level (``LOG_LEVEL``), upper-cased.
         database_log_level: Database log level (``DATABASE_LOG_LEVEL``), upper-cased.
+        newsapi_key: NewsAPI.org API key (``NEWSAPI_KEY``); empty disables the source.
+        finnhub_api_key: Finnhub API key (``FINNHUB_API_KEY``); empty disables the source.
+        alphavantage_api_key: Alpha Vantage API key (``ALPHAVANTAGE_API_KEY``); empty
+            disables the source.
     """
 
     database_url: str
@@ -46,6 +50,9 @@ class Settings:
     alert_summary_max_length: int = 180
     log_level: str = "INFO"
     database_log_level: str = "INFO"
+    newsapi_key: str = ""
+    finnhub_api_key: str = ""
+    alphavantage_api_key: str = ""
 
 
 def from_env(environ: Mapping[str, str] | None = None) -> Settings:
@@ -112,4 +119,7 @@ def from_env(environ: Mapping[str, str] | None = None) -> Settings:
         alert_summary_max_length=integer("ALERT_SUMMARY_MAX_LENGTH", base.alert_summary_max_length),
         log_level=text("LOG_LEVEL", base.log_level).upper(),
         database_log_level=text("DATABASE_LOG_LEVEL", base.database_log_level).upper(),
+        newsapi_key=text("NEWSAPI_KEY", ""),
+        finnhub_api_key=text("FINNHUB_API_KEY", ""),
+        alphavantage_api_key=text("ALPHAVANTAGE_API_KEY", ""),
     )
