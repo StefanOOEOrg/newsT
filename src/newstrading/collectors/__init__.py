@@ -5,6 +5,7 @@ from newstrading.collectors.finnhub import FinnhubCollector
 from newstrading.collectors.models import Asset, Post
 from newstrading.collectors.newsapi import NewsAPICollector
 from newstrading.collectors.registry import Collector, CollectorError, CollectorRegistry
+from newstrading.collectors.rss import Feed, RSSCollector
 
 __all__ = [
     "AlphaVantageCollector",
@@ -12,7 +13,9 @@ __all__ = [
     "Collector",
     "CollectorError",
     "CollectorRegistry",
+    "Feed",
     "FinnhubCollector",
     "NewsAPICollector",
     "Post",
+    "RSSCollector",
 ]
