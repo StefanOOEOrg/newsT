@@ -508,6 +508,10 @@ UPDATE rate_limit_config SET collector_name = 'congressional_trades'
 WHERE collector_name = 'CongressionalTradesCollector'
   AND NOT EXISTS (SELECT 1 FROM rate_limit_config WHERE collector_name = 'congressional_trades');
 
+UPDATE rate_limit_config SET collector_name = 'stock_prices'
+WHERE collector_name = 'StockPriceCollector'
+  AND NOT EXISTS (SELECT 1 FROM rate_limit_config WHERE collector_name = 'stock_prices');
+
 -- Insert default rate limit configurations
 -- The names are the source keys the collectors report (and write into ``posts.source``),
 -- not their class names: ``check_rate_limit`` treats an unknown name as "no limit".
@@ -517,28 +521,9 @@ VALUES
     ('finnhub', NULL, NULL, 60, 1, 'Free tier: 60 calls/minute'),
     ('alphavantage', 25, 5, NULL, 12, 'Free tier: 25 calls/day, 5 per minute recommended'),
     ('rss', NULL, NULL, NULL, 10, 'No hard limit, but respect servers'),
-    ('congressional_trades', NULL, NULL, NULL, 60, 'No hard limit, fetch once per minute')
+    ('congressional_trades', NULL, NULL, NULL, 60, 'No hard limit, fetch once per minute'),
+    ('stock_prices', NULL, 100, NULL, 300, 'Fetches stock prices from Yahoo Finance. Updates every 5 minutes during market hours.')
 ON CONFLICT (collector_name) DO NOTHING;
-
--- Rate limiting configuration for StockPriceCollector
--- (from migration 009_add_stock_prices; kept with the other rate limit rows so the table exists first)
-INSERT INTO rate_limit_config (
-    collector_name,
-    max_calls_per_day,
-    max_calls_per_hour,
-    max_calls_per_minute,
-    min_interval_seconds,
-    enabled,
-    notes
-) VALUES (
-    'StockPriceCollector',
-    NULL,  -- No daily limit (yfinance free tier is generous)
-    100,   -- Max 100 calls per hour (well below yfinance limit)
-    NULL,  -- No per-minute limit
-    300,   -- Minimum 300 seconds (5 minutes) between calls - matches collection interval
-    true,
-    'Fetches stock prices from Yahoo Finance. Updates every 5 minutes during market hours.'
-) ON CONFLICT (collector_name) DO NOTHING;
 
 -- View for API usage stats
 CREATE OR REPLACE VIEW api_usage_stats AS

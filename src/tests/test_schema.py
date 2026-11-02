@@ -11,6 +11,7 @@ from newstrading.collectors import (
     FinnhubCollector,
     NewsAPICollector,
     RSSCollector,
+    StockPriceCollector,
 )
 
 SCHEMA = Path(__file__).resolve().parents[2] / "sql" / "schema.sql"
@@ -32,6 +33,7 @@ COLLECTORS = (
     FinnhubCollector,
     NewsAPICollector,
     RSSCollector,
+    StockPriceCollector,
 )
 
 # The class names the schema seeded before the quota rows were keyed by source name.
@@ -41,6 +43,7 @@ RENAMES = (
     ("AlphaVantageCollector", AlphaVantageCollector.name),
     ("RSSCollector", RSSCollector.name),
     ("CongressionalTradesCollector", CongressionalTradesCollector.name),
+    ("StockPriceCollector", StockPriceCollector.name),
 )
 
 
@@ -50,7 +53,7 @@ def schema_text() -> str:
 
 
 def seeded_rate_limit_names() -> list[str]:
-    """Return the collector names of the five seeded ``rate_limit_config`` rows."""
+    """Return the collector names of the seeded ``rate_limit_config`` rows."""
     block = schema_text().split("INSERT INTO rate_limit_config", 1)[1].split(";", 1)[0]
     return re.findall(r"^\s*\('([a-z_]+)'", block, flags=re.MULTILINE)
 

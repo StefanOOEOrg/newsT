@@ -247,7 +247,7 @@ def collect_once(settings: Settings) -> int:
     return stored
 
 
-_PRICE_LIMIT_NAME = "StockPriceCollector"
+_PRICE_LIMIT_NAME = StockPriceCollector.name
 """Name of the price collector's quota row in ``rate_limit_config``."""
 
 
@@ -255,7 +255,7 @@ def collect_prices_once(settings: Settings) -> int:
     """Collect and store one round of price bars for every tracked asset.
 
     Runs after the post collectors of :func:`collect_once`; the quota row named
-    ``StockPriceCollector`` is checked before every Yahoo Finance call.
+    ``stock_prices`` (``StockPriceCollector.name``) is checked before every Yahoo Finance call.
 
     Args:
         settings: Settings handed to the collector, the store and the limiter.
