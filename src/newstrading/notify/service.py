@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 MAX_ERROR_LENGTH = 500
 ALERT_BATCH_LIMIT = 100
+UNDELIVERED_ATTEMPTS_LIMIT = 3
 
 Now = Callable[[], datetime]
 
@@ -60,7 +61,7 @@ _ALERTS_QUERY = """
     FROM alerts a
     JOIN asset c ON a.asset_id = c.id
     WHERE a.notified = FALSE
-    ORDER BY a.timestamp DESC
+    ORDER BY a.timestamp ASC
     LIMIT %s
 """
 
@@ -95,6 +96,12 @@ _MARK_NOTIFIED = """
     UPDATE alerts
     SET notified = TRUE, notified_at = NOW()
     WHERE id = %s
+"""
+
+_UNDELIVERED_COUNT = """
+    SELECT COUNT(*)
+    FROM notification_log
+    WHERE alert_id = %s AND status IN ('failed', 'skipped')
 """
 
 
@@ -229,7 +236,7 @@ class NotificationService:
         return NotificationSettings(*row)
 
     def _read_alerts(self, cursor: Any) -> list[Alert]:
-        """Read the unnotified alerts, newest first, at most ``ALERT_BATCH_LIMIT``."""
+        """Read the unnotified alerts, oldest first, at most ``ALERT_BATCH_LIMIT``."""
         cursor.execute(_ALERTS_QUERY, (ALERT_BATCH_LIMIT,))
         return [
             Alert(
@@ -279,6 +286,14 @@ class NotificationService:
             logger.debug("alert %s is below the confidence threshold", alert.id)
             self._mark_notified(cursor, alert.id)
             return True
+        if not any(channel in self._by_channel for channel in preference.channels):
+            logger.warning(
+                "alert %s has no deliverable channel (%s), marking it notified",
+                alert.id,
+                ", ".join(preference.channels) or "none configured",
+            )
+            self._mark_notified(cursor, alert.id)
+            return True
         if _is_quiet(preference.quiet_start, preference.quiet_end, self._now()):
             logger.info("alert %s deferred: quiet hours", alert.id)
             return False
@@ -286,7 +301,23 @@ class NotificationService:
         if sent:
             self._mark_notified(cursor, alert.id)
             logger.info("alert %s notified over %d channel(s)", alert.id, sent)
+            return True
+        undelivered = self._count_undelivered(cursor, alert.id)
+        if undelivered >= UNDELIVERED_ATTEMPTS_LIMIT:
+            logger.warning(
+                "alert %s undelivered %d time(s), giving up on it", alert.id, undelivered
+            )
+            self._mark_notified(cursor, alert.id)
+        else:
+            logger.info("alert %s undelivered %d time(s), retrying next run", alert.id, undelivered)
         return True
+
+    @staticmethod
+    def _count_undelivered(cursor: Any, alert_id: int) -> int:
+        """Return how many failed or skipped attempts ``notification_log`` holds for the alert."""
+        cursor.execute(_UNDELIVERED_COUNT, (alert_id,))
+        row = cursor.fetchone()
+        return 0 if row is None else int(row[0])
 
     def _send_over_channels(
         self,

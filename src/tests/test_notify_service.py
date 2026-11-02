@@ -1,7 +1,7 @@
 """Tests for newstrading.notify.service: the notification pass, without a database."""
 
 import logging
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 
 import pytest
 
@@ -67,13 +67,19 @@ def settings_row(**overrides):
 
 
 def alert_row(
-    *, alert_id=7, asset_id=3, alert_type="long_signal", confidence=0.92, description="Hiring surge"
+    *,
+    alert_id=7,
+    asset_id=3,
+    alert_type="long_signal",
+    confidence=0.92,
+    description="Hiring surge",
+    timestamp=None,
 ):
     """Return one row of the alert query: id, asset, time, type, text, score, name, ticker."""
     return (
         alert_id,
         asset_id,
-        datetime(2025, 11, 17, 14, 30, 15),
+        timestamp or datetime(2025, 11, 17, 14, 30, 15),
         alert_type,
         description,
         confidence,
@@ -112,7 +118,9 @@ class FakeCursor:
             row = self._database.settings
             self._rows = [] if row is None else [row]
         elif "FROM alerts a" in normalized:
-            self._rows = list(self._database.alerts)
+            self._rows = self._database.window(normalized, params)
+        elif "FROM notification_log" in normalized:
+            self._rows = [(self._database.undelivered_count(params[0], normalized),)]
         elif "FROM alert_notification_preferences" in normalized:
             self._rows = [
                 row
@@ -160,13 +168,30 @@ class FakeConnection:
 class FakeDatabase:
     """In-memory stand-in for the tables the notification pass reads."""
 
-    def __init__(self, *, settings=None, alerts=(), preferences=(), fail_with=None):
+    def __init__(self, *, settings=None, alerts=(), preferences=(), failed=0, fail_with=None):
         self.settings = settings
         self.alerts = list(alerts)
         self.preferences = list(preferences)
+        self.failed = failed
         self.fail_with = fail_with
         self.statements = []
         self.connection = None
+
+    def window(self, query, params):
+        """Return the alerts like the real query would: ordered, then limited."""
+        rows = sorted(self.alerts, key=lambda row: row[2])
+        if "ORDER BY a.timestamp DESC" in query:
+            rows.reverse()
+        limit = params[0] if params else None
+        return rows[:limit] if limit is not None else rows
+
+    def undelivered_count(self, alert_id, query):
+        """Return the log rows of ``alert_id`` that ``query`` asks for: pre-existing plus logged."""
+        statuses = {"failed"}
+        if "'skipped'" in query:
+            statuses.add("skipped")
+        logged = [row for row in self.logs() if row[0] == alert_id and row[3] in statuses]
+        return self.failed + len(logged)
 
     def matching(self, fragment):
         """Return the ``(query, params)`` statements containing ``fragment``."""
@@ -321,6 +346,97 @@ def test_an_alert_whose_channels_all_fail_stays_unnotified():
 
     assert handled == 1
     assert database.marked() == []
+
+
+@pytest.mark.parametrize(("previous_failures", "consumed"), [(0, False), (1, False), (2, True)])
+def test_a_failed_delivery_is_retried_before_the_alert_is_consumed(previous_failures, consumed):
+    """Three failed rows, counting the one this run logs, consume the alert."""
+    database = FakeDatabase(
+        settings=settings_row(),
+        alerts=[alert_row()],
+        preferences=[preference(channels=("email",))],
+        failed=previous_failures,
+    )
+    email = FakeSender("email", fail_with=NotificationError("smtp is down"))
+
+    handled = build(database, senders=[email]).run()
+
+    assert handled == 1
+    assert database.marked() == ([(7,)] if consumed else [])
+    (count_query, params) = database.matching("FROM notification_log")[-1]
+    assert "status IN ('failed', 'skipped')" in count_query
+    assert params == (7,)
+
+
+def test_the_third_failed_run_consumes_the_alert():
+    """Two runs leave it open, the third gives up on it."""
+    database = FakeDatabase(
+        settings=settings_row(), alerts=[alert_row()], preferences=[preference(channels=("email",))]
+    )
+    email = FakeSender("email", fail_with=NotificationError("smtp is down"))
+
+    outcomes = []
+    for _ in range(3):
+        build(database, senders=[email]).run()
+        outcomes.append(database.marked())
+
+    assert outcomes == [[], [], [(7,)]]
+    assert [row[3] for row in database.logs()] == ["failed", "failed", "failed"]
+
+
+def test_a_channel_that_only_skips_is_consumed_after_three_runs():
+    """A known channel reporting a skip reason is undelivered, just like a failure."""
+    database = FakeDatabase(
+        settings=settings_row(),
+        alerts=[alert_row()],
+        preferences=[preference(channels=("email",))],
+    )
+    email = FakeSender("email", skip="smtp_password is not configured")
+
+    outcomes = []
+    for _ in range(3):
+        build(database, senders=[email]).run()
+        outcomes.append(database.marked())
+
+    assert outcomes == [[], [], [(7,)]]
+    assert [row[3] for row in database.logs()] == ["skipped", "skipped", "skipped"]
+
+
+def test_a_successful_channel_consumes_the_alert_without_counting_retries():
+    """One success is enough; the retry count is not even read."""
+    database = FakeDatabase(
+        settings=settings_row(),
+        alerts=[alert_row()],
+        preferences=[preference(channels=("email", "webhook"))],
+        failed=5,
+    )
+    email = FakeSender("email", fail_with=NotificationError("smtp is down"))
+    webhook = FakeSender("webhook")
+
+    handled = build(database, senders=[email, webhook]).run()
+
+    assert handled == 1
+    assert database.marked() == [(7,)]
+    assert database.matching("FROM notification_log WHERE") == []
+
+
+def test_quiet_hours_do_not_touch_the_marker_or_the_retry_count():
+    """Deferred is not failed: nothing is marked, logged or counted."""
+    database = FakeDatabase(
+        settings=settings_row(),
+        alerts=[alert_row()],
+        preferences=[preference(channels=("email",))],
+        failed=5,
+    )
+    email = FakeSender("email")
+
+    handled = build(database, senders=[email], now=NIGHT).run()
+
+    assert handled == 0
+    assert email.sent == []
+    assert database.logs() == []
+    assert database.marked() == []
+    assert database.matching("COUNT(*)") == []
 
 
 def test_the_alert_is_marked_notified_with_the_legacy_statement():
@@ -485,8 +601,8 @@ def test_a_disabled_preference_is_marked_notified_without_a_send():
     assert database.marked() == [(7,)]
 
 
-def test_an_unknown_channel_is_ignored_with_a_warning(caplog):
-    """A channel without a sender must not break the run."""
+def test_unknown_channel_names_only_are_marked_notified_with_a_warning(caplog):
+    """Channels without a sender can never deliver, so the alert is consumed."""
     database = FakeDatabase(
         settings=settings_row(),
         alerts=[alert_row()],
@@ -499,11 +615,30 @@ def test_an_unknown_channel_is_ignored_with_a_warning(caplog):
     assert handled == 1
     assert "carrier_pigeon" in caplog.text
     assert database.logs() == []
-    assert database.marked() == []
+    assert database.marked() == [(7,)]
 
 
-def test_the_alert_query_orders_newest_first_and_is_bounded():
-    """The legacy order is kept and the batch carries a limit."""
+def test_an_empty_channel_list_is_marked_notified_without_an_attempt(caplog):
+    """A preference that lists no channel can never deliver."""
+    database = FakeDatabase(
+        settings=settings_row(),
+        alerts=[alert_row()],
+        preferences=[preference(channels=())],
+    )
+    email = FakeSender("email")
+
+    with caplog.at_level(logging.WARNING, logger="newstrading.notify.service"):
+        handled = build(database, senders=[email]).run()
+
+    assert handled == 1
+    assert email.sent == []
+    assert database.logs() == []
+    assert database.marked() == [(7,)]
+    assert "no deliverable channel" in caplog.text
+
+
+def test_the_alert_query_orders_oldest_first_and_is_bounded():
+    """Oldest first is what keeps a stuck alert from starving the rest."""
     database = FakeDatabase(settings=settings_row(), alerts=[], preferences=[])
 
     build(database, senders=[]).run()
@@ -511,9 +646,26 @@ def test_the_alert_query_orders_newest_first_and_is_bounded():
     (statement,) = database.matching("FROM alerts a")
     query, params = statement
     assert "WHERE a.notified = FALSE" in query
-    assert "ORDER BY a.timestamp DESC" in query
+    assert "ORDER BY a.timestamp ASC" in query
     assert "LIMIT %s" in query
     assert params == (ALERT_BATCH_LIMIT,)
+
+
+def test_an_old_alert_is_reached_when_more_alerts_wait_than_the_batch_holds():
+    """Ascending order plus the limit reaches the oldest alert, not the newest."""
+    start = datetime(2025, 11, 1, 0, 0, 0)
+    alerts = [
+        alert_row(alert_id=index + 1, timestamp=start + timedelta(minutes=index))
+        for index in range(ALERT_BATCH_LIMIT + 20)
+    ]
+    database = FakeDatabase(
+        settings=settings_row(), alerts=alerts, preferences=[preference(channels=("email",))]
+    )
+
+    handled = build(database, senders=[FakeSender("email")]).run()
+
+    assert handled == ALERT_BATCH_LIMIT
+    assert database.marked()[0] == (1,)
 
 
 def test_the_settings_query_reads_the_single_row():
