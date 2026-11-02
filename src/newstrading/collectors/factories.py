@@ -7,13 +7,16 @@ configuration error instead of silently collecting from fewer sources than confi
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from newstrading.collectors.alphavantage import AlphaVantageCollector
 from newstrading.collectors.congress import CongressionalTradesCollector
 from newstrading.collectors.finnhub import FinnhubCollector
 from newstrading.collectors.newsapi import NewsAPICollector
-from newstrading.collectors.registry import CollectorRegistry
+from newstrading.collectors.registry import Collector, CollectorRegistry, Factory
 from newstrading.collectors.rss import RSSCollector
 from newstrading.config import Settings
+from newstrading.rate_limiter import RateLimiter
 
 SOURCE_NAMES: tuple[str, ...] = (
     "rss",
@@ -22,6 +25,11 @@ SOURCE_NAMES: tuple[str, ...] = (
     "alphavantage",
     "congressional_trades",
 )
+
+
+def _limited(collector_class: Callable[..., Collector], name: str) -> Factory:
+    """Return a factory that gives every collector it builds its own limiter for ``name``."""
+    return lambda settings: collector_class(settings, limiter=RateLimiter(settings, name))
 
 
 def build_registry(settings: Settings) -> CollectorRegistry:
@@ -39,11 +47,12 @@ def build_registry(settings: Settings) -> CollectorRegistry:
         * ``rss`` and ``congressional_trades`` build without a key.
     """
     registry = CollectorRegistry()
+    # rss has no API key and no hard quota, so a quota check would only add noise.
     registry.register("rss", lambda _settings: RSSCollector())
-    registry.register("newsapi", lambda settings: NewsAPICollector(settings))
-    registry.register("finnhub", lambda settings: FinnhubCollector(settings))
-    registry.register("alphavantage", lambda settings: AlphaVantageCollector(settings))
+    registry.register("newsapi", _limited(NewsAPICollector, "newsapi"))
+    registry.register("finnhub", _limited(FinnhubCollector, "finnhub"))
+    registry.register("alphavantage", _limited(AlphaVantageCollector, "alphavantage"))
     registry.register(
-        "congressional_trades", lambda settings: CongressionalTradesCollector(settings)
+        "congressional_trades", _limited(CongressionalTradesCollector, "congressional_trades")
     )
     return registry

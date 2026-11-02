@@ -2,9 +2,9 @@
 
 ## Overview
 
-The keyed sources (NewsAPI, Finnhub, Alpha Vantage) have free-tier quotas. The package tracks every
-call and asks the database before a call whether another one is allowed, so a collection pass stops
-short of a quota instead of being rejected by the source.
+The sources with an API quota (NewsAPI, Finnhub, Alpha Vantage, congressional trades) have free-tier
+limits. The package tracks every call and asks the database before a call whether another one is
+allowed, so a collection pass stops short of a quota instead of being rejected by the source.
 
 The quota itself lives in PostgreSQL, not in the process: `sql/schema.sql` creates the tables, the
 view and the `check_rate_limit` function; `src/newstrading/rate_limiter.py` is the thin client the
@@ -37,14 +37,42 @@ The rows `sql/schema.sql` inserts into `rate_limit_config`:
 
 | `collector_name` | Daily | Hourly | Per minute | Min interval |
 |---|---:|---:|---:|---:|
-| `NewsAPICollector` | 100 | – | – | 1 s |
-| `FinnhubCollector` | – | – | 60 | 1 s |
-| `AlphaVantageCollector` | 25 | 5 | – | 12 s |
-| `RSSCollector` | – | – | – | 10 s |
-| `CongressionalTradesCollector` | – | – | – | 60 s |
+| `newsapi` | 100 | – | – | 1 s |
+| `finnhub` | – | – | 60 | 1 s |
+| `alphavantage` | 25 | 5 | – | 12 s |
+| `rss` | – | – | – | 10 s |
+| `congressional_trades` | – | – | – | 60 s |
 | `StockPriceCollector` | – | 100 | – | 300 s |
 
+The five source rows are keyed by the collector `name` — the same key the collector writes into
+`posts.source`. `rss` has a row for completeness, but no limiter is wired for it (see below), so the
+row is never consulted.
 `StockPriceCollector` is a row from the legacy schema; the package builds no collector for it.
+
+## Which collectors get a limiter
+
+`build_registry` in `src/newstrading/collectors/factories.py` passes one `RateLimiter` per collector
+for the four collectors that call a quota-limited API and accept a `limiter` argument:
+
+| Source | Collector | Limiter |
+|---|---|---|
+| `newsapi` | `NewsAPICollector` | yes |
+| `finnhub` | `FinnhubCollector` | yes |
+| `alphavantage` | `AlphaVantageCollector` | yes |
+| `congressional_trades` | `CongressionalTradesCollector` | yes |
+| `rss` | `RSSCollector` | no |
+
+`rss` is registered without a limiter: it has no API key and no hard quota, so a check would only add
+a database round trip and a usage row of noise. `RSSCollector` takes no `limiter` argument, and its
+signature is not changed for this. A plain `newstrading collect` therefore checks and records quotas
+for the four keyed sources and leaves `rss` untracked.
+
+## What a denied call does
+
+When `check_rate_limit` answers "no", every wired collector logs a warning with the reason (for
+example `Daily limit exceeded (100/100)`) and skips that request: no HTTP call is made and nothing is
+written to `api_usage`. Nothing is raised — the collection pass continues with the next asset, and the
+quota is checked again on the next pass once `wait_seconds` has elapsed.
 
 ## Using a limiter
 
@@ -57,7 +85,7 @@ from newstrading.config import from_env
 from newstrading.rate_limiter import RateLimiter
 
 settings = from_env()
-limiter = RateLimiter(settings, "NewsAPICollector")
+limiter = RateLimiter(settings, "newsapi")
 collector = NewsAPICollector(settings, limiter=limiter)
 ```
 
@@ -65,11 +93,10 @@ Inside `collect_for_asset` the collector then asks the limiter before the reques
 outcome after it; see `src/newstrading/collectors/newsapi.py` for the pattern the other keyed
 collectors follow.
 
-The name passed to `RateLimiter` is the `collector_name` of the `rate_limit_config` row. The source
-keys of `src/newstrading/collectors/factories.py` (`newsapi`, `finnhub`, `alphavantage`,
-`congressional_trades`) are not the same strings as the default rows, so pass the row name as above.
-`build_registry` currently builds the collectors without a limiter, so a plain `newstrading collect`
-neither checks nor records quotas.
+The name passed to `RateLimiter` is the collector `name` and the `collector_name` of the
+`rate_limit_config` row: `newsapi`, `finnhub`, `alphavantage`, `congressional_trades` (and `rss`,
+which has a row but no limiter). The registry uses the same five strings, so no mapping is needed
+between the source key and the quota row.
 
 ## Monitoring
 
@@ -115,7 +142,7 @@ ORDER BY usage_percent DESC;
 UPDATE rate_limit_config
 SET max_calls_per_day = 50,
     min_interval_seconds = 2
-WHERE collector_name = 'NewsAPICollector';
+WHERE collector_name = 'newsapi';
 ```
 
 Disable the quota of a source without removing its row:
@@ -123,7 +150,7 @@ Disable the quota of a source without removing its row:
 ```sql
 UPDATE rate_limit_config
 SET enabled = FALSE
-WHERE collector_name = 'RSSCollector';
+WHERE collector_name = 'rss';
 ```
 
 ## Troubleshooting
