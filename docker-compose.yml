@@ -1,3 +1,4 @@
+# The package has its own image; only the database and one app service remain.
 services:
   postgres:
     image: postgres:15-alpine
@@ -10,78 +11,28 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./sql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U trading"]
+      test: ["CMD-SHELL", "pg_isready -U trading -d newstrading"]
       interval: 5s
       timeout: 5s
       retries: 5
 
-  collector:
+  app:
     build:
       context: .
-      dockerfile: collector/Dockerfile
-    container_name: newstrading_collector
+      dockerfile: Dockerfile
+    container_name: newstrading_app
     depends_on:
       postgres:
         condition: service_healthy
     env_file:
-      - .env
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://trading:trading123@postgres:5432/newstrading
     restart: unless-stopped
-    volumes:
-      - ./collector:/app
-      - ./shared:/app/shared
-
-  analyzer:
-    build:
-      context: .
-      dockerfile: analyzer/Dockerfile
-    container_name: newstrading_analyzer
-    depends_on:
-      postgres:
-        condition: service_healthy
-    env_file:
-      - .env
-    restart: unless-stopped
-    volumes:
-      - ./analyzer:/app
-      - ./shared:/app/shared
-
-  dashboard:
-    build:
-      context: .
-      dockerfile: dashboard/Dockerfile
-    container_name: newstrading_dashboard
-    depends_on:
-      postgres:
-        condition: service_healthy
-    env_file:
-      - .env
-    ports:
-      - "8501:8501"
-    restart: unless-stopped
-    volumes:
-      - ./dashboard:/app
-      - ./shared:/app/shared
-      - ./collector:/app/collector
-    dns:
-      - 8.8.8.8
-      - 8.8.4.4
-
-  notifier:
-    build:
-      context: .
-      dockerfile: notifier/Dockerfile
-    container_name: newstrading_notifier
-    depends_on:
-      postgres:
-        condition: service_healthy
-    env_file:
-      - .env
-    restart: unless-stopped
-    volumes:
-      - ./notifier:/app
-      - ./shared:/app/shared
+    command: ["collect"]
 
 volumes:
   postgres_data:
