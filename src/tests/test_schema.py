@@ -29,3 +29,11 @@ def test_schema_defines_every_object_the_code_uses(name):
     """Each object the code queries must exist in the one schema file."""
     pattern = rf"CREATE (TABLE|OR REPLACE VIEW|OR REPLACE FUNCTION)( IF NOT EXISTS)? {name}\b"
     assert re.search(pattern, schema_text()), f"{name} is missing from sql/schema.sql"
+
+
+def test_asset_events_has_the_unique_key_the_event_store_relies_on():
+    """``ON CONFLICT DO NOTHING`` is only idempotent with this key on the table."""
+    body = schema_text().split("CREATE TABLE IF NOT EXISTS asset_events", 1)[1].split(");", 1)[0]
+    compact = " ".join(body.split())
+
+    assert "UNIQUE(asset_id, event_type, event_date, description)" in compact

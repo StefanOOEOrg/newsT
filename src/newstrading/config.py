@@ -39,6 +39,10 @@ class Settings:
         finnhub_api_key: Finnhub API key (``FINNHUB_API_KEY``); empty disables the source.
         alphavantage_api_key: Alpha Vantage API key (``ALPHAVANTAGE_API_KEY``); empty
             disables the source.
+        congress_trades_api_key: Premium congressional trades API key
+            (``CONGRESS_TRADES_API_KEY``); empty keeps the public source only.
+        congress_trades_api_url: Premium congressional trades endpoint
+            (``CONGRESS_TRADES_API_URL``); empty keeps the public source only.
     """
 
     database_url: str
@@ -53,6 +57,8 @@ class Settings:
     newsapi_key: str = ""
     finnhub_api_key: str = ""
     alphavantage_api_key: str = ""
+    congress_trades_api_key: str = ""
+    congress_trades_api_url: str = ""
 
 
 def from_env(environ: Mapping[str, str] | None = None) -> Settings:
@@ -122,4 +128,6 @@ def from_env(environ: Mapping[str, str] | None = None) -> Settings:
         newsapi_key=text("NEWSAPI_KEY", ""),
         finnhub_api_key=text("FINNHUB_API_KEY", ""),
         alphavantage_api_key=text("ALPHAVANTAGE_API_KEY", ""),
+        congress_trades_api_key=text("CONGRESS_TRADES_API_KEY", ""),
+        congress_trades_api_url=text("CONGRESS_TRADES_API_URL", ""),
     )

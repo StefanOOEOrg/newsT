@@ -30,6 +30,8 @@ def test_from_env_uses_defaults_for_absent_optionals():
     assert settings.newsapi_key == ""
     assert settings.finnhub_api_key == ""
     assert settings.alphavantage_api_key == ""
+    assert settings.congress_trades_api_key == ""
+    assert settings.congress_trades_api_url == ""
 
 
 def test_from_env_reads_the_collector_api_keys():
@@ -48,6 +50,22 @@ def test_from_env_reads_the_collector_api_keys():
     assert settings.newsapi_key == "newsapi-key"
     assert settings.finnhub_api_key == "finnhub-key"
     assert settings.alphavantage_api_key == "alpha-key"
+
+
+def test_from_env_reads_the_congressional_trades_settings():
+    """The premium congressional trades source is configured, never required."""
+    env = dict(REQUIRED)
+    env.update(
+        {
+            "CONGRESS_TRADES_API_KEY": "premium-key",
+            "CONGRESS_TRADES_API_URL": "https://premium.example.com/trades",
+        }
+    )
+
+    settings = from_env(env)
+
+    assert settings.congress_trades_api_key == "premium-key"
+    assert settings.congress_trades_api_url == "https://premium.example.com/trades"
 
 
 def test_from_env_reads_overrides():
