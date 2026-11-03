@@ -6,6 +6,7 @@ import { Page, PostRow } from '../../api/models';
 import { PostsQuery, PostsService } from '../../api/posts.service';
 import { pageOf, postRowsFixture } from '../../api/testing/fixtures';
 import { Posts } from './posts';
+import { PostsStore } from './posts.store';
 
 /** In-memory `/api/posts` answer of the spec. */
 class FakePosts {
@@ -100,5 +101,44 @@ describe('Posts screen', () => {
     next.click();
     TestBed.tick();
     expect(fake.queries.at(-1)?.page).toBe(2);
+  });
+
+  it('offers the four page sizes, sends the picked one and restarts at page 1', () => {
+    const fake = new FakePosts();
+    fake.answer = pageOf(postRowsFixture(), 120);
+    const fixture = render(fake);
+    const el = fixture.nativeElement as HTMLElement;
+
+    const options = Array.from(el.querySelectorAll<HTMLOptionElement>('.pager select option'));
+    expect(options.map((option) => option.value)).toEqual(['25', '50', '100', '200']);
+
+    const select = el.querySelector<HTMLSelectElement>('.pager select')!;
+    expect(select.value).toBe('25');
+
+    TestBed.inject(PostsStore).setPage(3);
+    TestBed.tick();
+    fixture.detectChanges();
+    expect(el.querySelector('.pager span')?.textContent).toContain('page 3 / 5');
+
+    select.value = '100';
+    select.dispatchEvent(new Event('change'));
+    TestBed.tick();
+    fixture.detectChanges();
+
+    expect(fake.queries.at(-1)).toEqual({ page: 1, per_page: 100, asset_id: null, source: null });
+    expect(el.querySelector('.pager span')?.textContent).toContain('page 1 / 2');
+  });
+
+  it('says so when a page beyond the last one was clamped', () => {
+    const fake = new FakePosts();
+    fake.answer = pageOf(postRowsFixture(), 60);
+    const fixture = render(fake);
+    const el = fixture.nativeElement as HTMLElement;
+
+    TestBed.inject(PostsStore).setPage(99);
+    TestBed.tick();
+    fixture.detectChanges();
+
+    expect(el.querySelector('[data-testid="page-notice"]')?.textContent).toContain('page 3');
   });
 });

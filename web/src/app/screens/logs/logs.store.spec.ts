@@ -116,4 +116,64 @@ describe('LogsStore', () => {
     expect(store.filtered()).toBe(false);
     expect(fake.queries.at(-1)).toEqual({ page: 1, per_page: 50, level: null });
   });
+
+  it('asks the endpoint exactly once per page change', () => {
+    const fake = new FakeLogs();
+    fake.answer = pageOf(logRowsFixture(), 120);
+    const store = setup(fake);
+    const before = fake.queries.length;
+
+    store.next();
+    TestBed.tick();
+    expect(fake.queries.length).toBe(before + 1);
+    expect(fake.queries.at(-1)?.page).toBe(2);
+
+    store.setPage(3);
+    TestBed.tick();
+    expect(fake.queries.length).toBe(before + 2);
+    expect(fake.queries.at(-1)?.page).toBe(3);
+
+    store.previous();
+    TestBed.tick();
+    expect(fake.queries.length).toBe(before + 3);
+    expect(fake.queries.at(-1)?.page).toBe(2);
+  });
+
+  it('clamps a page beyond the last one to the last page and says so', () => {
+    const fake = new FakeLogs();
+    fake.answer = pageOf(logRowsFixture(), 120);
+    const store = setup(fake);
+    const before = fake.queries.length;
+
+    store.setPage(99);
+    TestBed.tick();
+
+    expect(store.pages()).toBe(3);
+    expect(store.page()).toBe(3);
+    expect(fake.queries.length).toBe(before + 1);
+    expect(fake.queries.at(-1)?.page).toBe(3);
+    expect(store.pageNotice()).toContain('page 3');
+    expect(store.pageNotice()).toContain('does not exist');
+
+    store.setLevel('ERROR');
+    TestBed.tick();
+    expect(store.pageNotice()).toBeNull();
+  });
+
+  it('changes the page size, starts again at page 1 and keeps the window inside the list', () => {
+    const fake = new FakeLogs();
+    fake.answer = pageOf(logRowsFixture(), 120);
+    const store = setup(fake);
+
+    store.setPage(3);
+    TestBed.tick();
+
+    store.setPerPage(100);
+    TestBed.tick();
+
+    expect(store.perPage()).toBe(100);
+    expect(store.page()).toBe(1);
+    expect(fake.queries.at(-1)).toEqual({ page: 1, per_page: 100, level: null });
+    expect(store.pages()).toBe(2);
+  });
 });

@@ -6,6 +6,7 @@ import { AlertsQuery, AlertsService } from '../../api/alerts.service';
 import { AlertRow, Page } from '../../api/models';
 import { alertRowsFixture, pageOf } from '../../api/testing/fixtures';
 import { Alerts } from './alerts';
+import { AlertsStore } from './alerts.store';
 
 /** In-memory `/api/alerts` answer of the spec. */
 class FakeAlerts {
@@ -94,5 +95,44 @@ describe('Alerts screen', () => {
     TestBed.tick();
 
     expect(fake.queries.at(-1)).toEqual({ page: 1, per_page: 25, severity: 'high' });
+  });
+
+  it('offers the four page sizes, sends the picked one and restarts at page 1', () => {
+    const fake = new FakeAlerts();
+    fake.answer = pageOf(alertRowsFixture(), 120);
+    const fixture = render(fake);
+    const el = fixture.nativeElement as HTMLElement;
+
+    const options = Array.from(el.querySelectorAll<HTMLOptionElement>('.pager select option'));
+    expect(options.map((option) => option.value)).toEqual(['25', '50', '100', '200']);
+
+    const select = el.querySelector<HTMLSelectElement>('.pager select')!;
+    expect(select.value).toBe('25');
+
+    TestBed.inject(AlertsStore).setPage(3);
+    TestBed.tick();
+    fixture.detectChanges();
+    expect(el.querySelector('.pager span')?.textContent).toContain('page 3 / 5');
+
+    select.value = '50';
+    select.dispatchEvent(new Event('change'));
+    TestBed.tick();
+    fixture.detectChanges();
+
+    expect(fake.queries.at(-1)).toEqual({ page: 1, per_page: 50, severity: null });
+    expect(el.querySelector('.pager span')?.textContent).toContain('page 1 / 3');
+  });
+
+  it('says so when a page beyond the last one was clamped', () => {
+    const fake = new FakeAlerts();
+    fake.answer = pageOf(alertRowsFixture(), 60);
+    const fixture = render(fake);
+    const el = fixture.nativeElement as HTMLElement;
+
+    TestBed.inject(AlertsStore).setPage(42);
+    TestBed.tick();
+    fixture.detectChanges();
+
+    expect(el.querySelector('[data-testid="page-notice"]')?.textContent).toContain('page 3');
   });
 });

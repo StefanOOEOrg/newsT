@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
 
+import { PAGE_SIZES } from '../paging';
 import { PostsStore } from './posts.store';
 
 /**
@@ -15,4 +16,6 @@ import { PostsStore } from './posts.store';
 })
 export class Posts {
   protected readonly store = inject(PostsStore);
+  /** The page sizes of the pager's selector (#59). */
+  protected readonly pageSizes = PAGE_SIZES;
 }

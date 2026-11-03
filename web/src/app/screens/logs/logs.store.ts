@@ -4,6 +4,7 @@ import { dash, levelTone, metadataText, stamp } from '../../api/format';
 import { Failure, toFailure } from '../../api/http-failure';
 import { LogRow, LogView } from '../../api/models';
 import { LogsQuery, LogsService } from '../../api/logs.service';
+import { clampPage, pageNoticeFor } from '../paging';
 
 /** Rows the log table asks for per page. */
 export const LOGS_PER_PAGE = 50;
@@ -27,6 +28,9 @@ export class LogsStore {
   readonly level = signal<string | null>(null);
   readonly loading = signal(false);
   readonly error = signal<Failure | null>(null);
+
+  /** The sentence of the last clamped jump, `null` for a normal move; the pager prints it. */
+  readonly pageNotice = signal<string | null>(null);
 
   private readonly request = signal(0);
 
@@ -95,7 +99,16 @@ export class LogsStore {
   }
 
   setPage(page: number): void {
-    this.page.set(Math.min(Math.max(1, Math.trunc(page)), this.pages()));
+    const target = clampPage(page, this.pages());
+    this.pageNotice.set(pageNoticeFor(target));
+    this.page.set(target.page);
+  }
+
+  /** Pick one of `PAGE_SIZES`; the list starts again at page 1, so the window stays valid. */
+  setPerPage(size: number): void {
+    this.perPage.set(size);
+    this.pageNotice.set(null);
+    this.page.set(1);
   }
 
   next(): void {
@@ -110,6 +123,7 @@ export class LogsStore {
   setLevel(level: string): void {
     const trimmed = level.trim();
     this.level.set(trimmed === '' ? null : trimmed);
+    this.pageNotice.set(null);
     this.page.set(1);
   }
 }
