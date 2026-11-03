@@ -1,21 +1,18 @@
-import { ChangeDetectionStrategy, Component } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
+
+import { OverviewStore } from './overview.store';
 
 /**
- * Placeholder for the overview screen `/` - *Is it running?*
+ * The overview screen `/` - *Is it running?*
  *
- * The real screen (counters, the last collector run, the database size) arrives with #58; this
- * component only proves the route, the shell and the layout.
+ * Counters, the last collector run and the database size. The component only reads the store's
+ * signals; loading, errors and the empty state live there (#58).
  */
 @Component({
   selector: 'app-overview',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  template: `
-    <section class="screen">
-      <h1>Overview</h1>
-      <p class="hint">
-        Is it running? The counters, the last collector run and the database size arrive with #58.
-      </p>
-    </section>
-  `,
+  templateUrl: './overview.html',
 })
-export class Overview {}
+export class Overview {
+  protected readonly store = inject(OverviewStore);
+}

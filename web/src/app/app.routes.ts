@@ -27,10 +27,10 @@ export const NAV_ITEMS: readonly NavItem[] = [
 ];
 
 /**
- * Application routes: six lazy placeholders plus a 404 component.
+ * Application routes: the six screens, each with its own signal store, plus a 404 component.
  *
- * The placeholder screens are replaced by the real screens and their signal stores in #58; the
- * shell, the routes and the navigation stay as they are.
+ * The routes and the navigation are the ones of the shell (#57); #58 filled the components with
+ * the stores, the services and the tables.
  */
 export const routes: Routes = [
   {

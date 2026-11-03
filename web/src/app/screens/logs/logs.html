@@ -1,0 +1,81 @@
+<section class="screen">
+  <h1>Logs</h1>
+  <p class="hint">What went wrong? <code>system_logs</code>, newest first.</p>
+
+  <div class="toolbar">
+    <label>
+      Level
+      <select #level (change)="store.setLevel(level.value)">
+        <option value="">Any level</option>
+        @for (option of levels; track option) {
+          <option [value]="option">{{ option }}</option>
+        }
+      </select>
+    </label>
+    <button type="button" (click)="store.reload()" [disabled]="store.loading()">Refresh</button>
+    <span class="hint">{{ store.total() }} lines</span>
+  </div>
+
+  @if (store.error(); as failure) {
+    <p class="error" data-testid="error">
+      Could not load the logs (HTTP {{ failure.status }}). {{ failure.message }}
+    </p>
+  } @else if (store.empty()) {
+    @if (store.filtered()) {
+      <p class="empty" data-testid="empty">
+        No log lines of this level — choose “Any level” to see all of them.
+      </p>
+    } @else {
+      <p class="empty" data-testid="empty">
+        No log lines yet — the services write them to <code>system_logs</code> while they run.
+      </p>
+    }
+  } @else if (store.rows().length === 0) {
+    <p class="hint" data-testid="loading">Loading the logs…</p>
+  } @else {
+    <div class="panel">
+      <table class="data">
+        <thead>
+          <tr>
+            <th class="num">Id</th>
+            <th>Timestamp</th>
+            <th>Level</th>
+            <th>Logger</th>
+            <th>Service</th>
+            <th>Message</th>
+            <th>Function</th>
+            <th class="num">Line</th>
+            <th>Exception</th>
+            <th>Metadata</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (row of store.rows(); track row.id) {
+            <tr>
+              <td class="num">{{ row.id }}</td>
+              <td>{{ row.timestamp }}</td>
+              <td>
+                <span [class]="'pill ' + row.tone">{{ row.level }}</span>
+              </td>
+              <td>{{ row.logger }}</td>
+              <td>{{ row.service }}</td>
+              <td class="wrap">{{ row.message }}</td>
+              <td>{{ row.function }}</td>
+              <td class="num">{{ row.line }}</td>
+              <td class="wrap">{{ row.exception }}</td>
+              <td class="wrap">{{ row.metadata }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+
+    <div class="pager">
+      <button type="button" (click)="store.previous()" [disabled]="!store.hasPrevious()">
+        Previous
+      </button>
+      <span>page {{ store.page() }} / {{ store.pages() }}</span>
+      <button type="button" (click)="store.next()" [disabled]="!store.hasNext()">Next</button>
+    </div>
+  }
+</section>

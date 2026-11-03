@@ -1,0 +1,97 @@
+<section class="screen">
+  <h1>Posts</h1>
+  <p class="hint">What did it find? Posts with their analysis, newest first.</p>
+
+  <div class="toolbar">
+    <label>
+      Asset
+      <input
+        #asset
+        type="text"
+        inputmode="numeric"
+        placeholder="any"
+        [value]="store.assetId() ?? ''"
+        (change)="store.setAsset(asset.value)"
+      />
+    </label>
+    <label>
+      Source
+      <input
+        #source
+        type="text"
+        placeholder="any"
+        [value]="store.source() ?? ''"
+        (change)="store.setSource(source.value)"
+      />
+    </label>
+    <button type="button" (click)="store.reload()" [disabled]="store.loading()">Refresh</button>
+    <span class="hint">{{ store.total() }} posts</span>
+  </div>
+
+  @if (store.error(); as failure) {
+    <p class="error" data-testid="error">
+      Could not load the posts (HTTP {{ failure.status }}). {{ failure.message }}
+    </p>
+  } @else if (store.empty()) {
+    @if (store.filtered()) {
+      <p class="empty" data-testid="empty">
+        No posts match this filter — clear the asset or the source field to see all of them.
+      </p>
+    } @else {
+      <p class="empty" data-testid="empty">
+        No posts yet — run <code>newstrading collect</code> to fill this table.
+      </p>
+    }
+  } @else if (store.rows().length === 0) {
+    <p class="hint" data-testid="loading">Loading the posts…</p>
+  } @else {
+    <div class="panel">
+      <table class="data">
+        <thead>
+          <tr>
+            <th class="num">Id</th>
+            <th>Asset</th>
+            <th>Source</th>
+            <th>Title</th>
+            <th class="num">Score</th>
+            <th>Created</th>
+            <th>Sentiment</th>
+            <th class="num">Sentiment score</th>
+            <th>Category</th>
+            <th>Summary</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (row of store.rows(); track row.id) {
+            <tr>
+              <td class="num">{{ row.id }}</td>
+              <td>{{ row.asset }}</td>
+              <td>{{ row.source }}</td>
+              <td class="wrap">
+                @if (row.url) {
+                  <a [href]="row.url" target="_blank" rel="noreferrer noopener">{{ row.title }}</a>
+                } @else {
+                  {{ row.title }}
+                }
+              </td>
+              <td class="num">{{ row.score }}</td>
+              <td>{{ row.created }}</td>
+              <td>{{ row.sentiment }}</td>
+              <td class="num">{{ row.sentimentScore }}</td>
+              <td>{{ row.category }}</td>
+              <td class="wrap">{{ row.summary }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+
+    <div class="pager">
+      <button type="button" (click)="store.previous()" [disabled]="!store.hasPrevious()">
+        Previous
+      </button>
+      <span>page {{ store.page() }} / {{ store.pages() }}</span>
+      <button type="button" (click)="store.next()" [disabled]="!store.hasNext()">Next</button>
+    </div>
+  }
+</section>
