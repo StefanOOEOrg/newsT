@@ -6,11 +6,15 @@ builds their prompt, calls the model, parses the answer and writes one row per p
 ``ai_analysis`` — the service the CLI's ``analyze`` command runs.
 
 The database connection, the model call and the sleep are injected, so the analyzer is
-testable without a database, a socket or a real wait. The retry policy is the legacy
-one: a post is not retried forever. An empty answer is retried when the completion
-raises :class:`~newstrading.analysis.llm.RetryableModelError` — which the adapters do —
-and stored as the neutral analysis only when a completion hands back an empty string
-instead (the content-moderation case the legacy callable encoded).
+testable without a database, a socket or a real wait. A batch calls the model up to
+``LLM_MAX_CONCURRENCY`` times at once (:class:`~concurrent.futures.ThreadPoolExecutor`) and
+still stores its rows in the order the database returned them, so the write order does not
+depend on which answer arrives first: ``1`` and ``3`` calls in flight write the same rows in
+the same order. The retry policy is the legacy one: a post is not retried forever. An empty
+answer is retried when the completion raises
+:class:`~newstrading.analysis.llm.RetryableModelError` — which the adapters do — and stored
+as the neutral analysis only when a completion hands back an empty string instead (the
+content-moderation case the legacy callable encoded).
 """
 
 from __future__ import annotations
@@ -18,6 +22,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import psycopg2
@@ -188,21 +193,52 @@ class Analyzer:
               rolls back and raises :class:`AnalysisError`.
             * A post the model cannot answer or whose answer cannot be parsed is logged
               and skipped, so the rest of the batch runs and the next run retries it.
+            * The model calls of the batch run up to ``settings.llm_max_concurrency``
+              at a time, while the rows are still stored in the order the database
+              returned them — see :meth:`_store_batch`.
         """
         stored = 0
         try:
             with connection(self._settings, connector=self._connector) as db:
-                for row in self._pending_rows(db, limit):
-                    analysis = self._analyze(row)
-                    if analysis is None:
-                        continue
-                    self._store(db, row[0], analysis)
-                    stored += 1
-                    if self._on_analysis is not None:
-                        self._on_analysis(analysis, row[1])
+                stored = self._store_batch(db, self._pending_rows(db, limit))
         # boundary: driver and programming failures become the analyzer's error type
         except Exception as error:
             raise AnalysisError("analysis run failed") from error
+        return stored
+
+    def _store_batch(self, db: Any, rows: list[Any]) -> int:
+        """Analyse a batch of posts in parallel and store the answers in row order.
+
+        Args:
+            db: The connection of this run; every insert goes through it.
+            rows: The rows of :data:`UNANALYZED_SQL`, in the order the database
+                returned them, newest post first.
+
+        Returns:
+            Number of analyses written.
+
+        Contract:
+            * The prompt is built, the model called and the answer parsed in a worker
+              thread; at most ``settings.llm_max_concurrency`` model calls are in
+              flight at once, and ``1`` (the default) runs them one after the other.
+            * :func:`~concurrent.futures.Executor.map` yields the results in
+              submission order, so a post is stored in the order of ``rows`` whichever
+              call finished first — ``1`` and ``3`` write the same rows in the same
+              order.
+            * The insert, the commit and the ``on_analysis`` callback stay on the
+              caller's thread and on the connection of the run; a post whose analysis
+              is ``None`` is skipped like a failing one.
+        """
+        stored = 0
+        workers = self._settings.llm_max_concurrency
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="analyze") as executor:
+            for row, analysis in zip(rows, executor.map(self._analyze, rows), strict=True):
+                if analysis is None:
+                    continue
+                self._store(db, row[0], analysis)
+                stored += 1
+                if self._on_analysis is not None:
+                    self._on_analysis(analysis, row[1])
         return stored
 
     def _pending_rows(self, db: Any, limit: int) -> list[Any]:
