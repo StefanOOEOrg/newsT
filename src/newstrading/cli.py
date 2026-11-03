@@ -47,7 +47,9 @@ COMMANDS = ("init-db", "collect", "analyze", "notify")
 REQUIRED_VARIABLES: dict[str, tuple[str, ...]] = {
     "init-db": ("DATABASE_URL",),
     "collect": ("DATABASE_URL",),
-    "analyze": ("DATABASE_URL", "ANTHROPIC_API_KEY"),
+    # ``LLM_PROVIDER=anthropic`` additionally needs ``ANTHROPIC_API_KEY``; that
+    # condition depends on a value and is therefore checked by ``config.from_env``.
+    "analyze": ("DATABASE_URL",),
     "notify": ("DATABASE_URL",),
 }
 
@@ -134,8 +136,9 @@ def settings_for(command: str, environ: Mapping[str, str] | None = None) -> Sett
         raise ConfigError(f"missing required environment variables: {', '.join(missing)}")
     values = dict(source)
     if command != "analyze":
-        # ``from_env`` validates the model key for every command; only ``analyze`` uses it,
-        # so the other commands hand it a placeholder and drop it again below.
+        # Only ``analyze`` calls the model, so the other commands must not fail on a
+        # missing ``ANTHROPIC_API_KEY`` even with ``LLM_PROVIDER=anthropic``: they hand
+        # ``from_env`` a placeholder and drop it again below.
         values.setdefault("ANTHROPIC_API_KEY", _UNUSED_ANALYSIS_KEY)
     settings = from_env(values)
     if command == "analyze":

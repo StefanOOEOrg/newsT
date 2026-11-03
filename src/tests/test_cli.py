@@ -35,6 +35,13 @@ COMMANDS = ("init-db", "collect", "analyze", "notify")
 CONFIGURED = (
     "DATABASE_URL",
     "ANTHROPIC_API_KEY",
+    "LLM_PROVIDER",
+    "LLM_BASE_URL",
+    "LLM_MODEL",
+    "LLM_API_KEY",
+    "LLM_TIMEOUT",
+    "LLM_MAX_TOKENS",
+    "LLM_MAX_CONCURRENCY",
     "NEWSAPI_KEY",
     "FINNHUB_API_KEY",
     "ALPHAVANTAGE_API_KEY",
@@ -444,9 +451,12 @@ def test_missing_database_url_does_not_run_the_bootstrap(environment, capsys):
     assert "DATABASE_URL" in capsys.readouterr().err
 
 
-def test_analyze_without_the_model_key_exits_2_and_names_it(environment, capsys):
-    """``analyze`` alone needs ``ANTHROPIC_API_KEY``; it exits 2 before any analysis."""
+def test_analyze_with_the_anthropic_provider_without_the_key_exits_2_and_names_it(
+    environment, capsys
+):
+    """``LLM_PROVIDER=anthropic`` needs ``ANTHROPIC_API_KEY``; it exits 2 before any analysis."""
     environment.setenv("DATABASE_URL", URL)
+    environment.setenv("LLM_PROVIDER", "anthropic")
     calls = []
     environment.setattr("newstrading.cli.analyze_pending", calls.append)
 
@@ -455,6 +465,20 @@ def test_analyze_without_the_model_key_exits_2_and_names_it(environment, capsys)
     error = capsys.readouterr().err
     assert "ANTHROPIC_API_KEY" in error
     assert calls == []
+
+
+def test_analyze_with_the_local_provider_needs_no_anthropic_key(environment):
+    """The default provider is local: ``DATABASE_URL`` alone starts the pass."""
+    environment.setenv("DATABASE_URL", URL)
+    calls = []
+    environment.setattr(
+        "newstrading.cli.analyze_pending", lambda settings: calls.append(settings) or 0
+    )
+
+    assert main(["analyze"]) == 0
+
+    assert [settings.llm_provider for settings in calls] == ["local"]
+    assert [settings.anthropic_api_key for settings in calls] == [""]
 
 
 def test_collect_builds_only_the_sources_without_a_key(environment):

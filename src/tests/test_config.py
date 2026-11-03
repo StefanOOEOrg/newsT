@@ -7,10 +7,7 @@ import pytest
 from newstrading.config import DEFAULT_AI_MODEL, Settings, from_env
 from newstrading.errors import ConfigError, NewsTradingError
 
-REQUIRED = {
-    "DATABASE_URL": "postgresql://user:pw@localhost:5432/newstrading",
-    "ANTHROPIC_API_KEY": "sk-test",
-}
+REQUIRED = {"DATABASE_URL": "postgresql://user:pw@localhost:5432/newstrading"}
 
 
 def test_from_env_uses_defaults_for_absent_optionals():
@@ -19,7 +16,7 @@ def test_from_env_uses_defaults_for_absent_optionals():
 
     assert isinstance(settings, Settings)
     assert settings.database_url == REQUIRED["DATABASE_URL"]
-    assert settings.anthropic_api_key == "sk-test"
+    assert settings.anthropic_api_key == ""
     assert settings.ai_model == DEFAULT_AI_MODEL
     assert settings.max_tokens == 512
     assert settings.analysis_interval_minutes == 5
@@ -32,6 +29,13 @@ def test_from_env_uses_defaults_for_absent_optionals():
     assert settings.alphavantage_api_key == ""
     assert settings.congress_trades_api_key == ""
     assert settings.congress_trades_api_url == ""
+    assert settings.llm_provider == "local"
+    assert settings.llm_base_url == "http://192.168.178.87:8004/v1"
+    assert settings.llm_model == "gb10-writing"
+    assert settings.llm_api_key == ""
+    assert settings.llm_timeout == 60.0
+    assert settings.llm_max_tokens == 1024
+    assert settings.llm_max_concurrency == 1
 
 
 def test_from_env_reads_the_collector_api_keys():
@@ -102,7 +106,8 @@ def test_from_env_names_every_missing_required_variable():
     message = str(error.value)
     assert "missing required environment variables" in message
     assert "DATABASE_URL" in message
-    assert "ANTHROPIC_API_KEY" in message
+    # The model key is only required by the anthropic provider (see below).
+    assert "ANTHROPIC_API_KEY" not in message
 
 
 def test_from_env_treats_empty_required_variable_as_missing():
@@ -165,3 +170,99 @@ def test_settings_is_frozen():
 def test_config_error_is_a_newstrading_error():
     """The package exposes one catchable base type (guideline §6)."""
     assert issubclass(ConfigError, NewsTradingError)
+
+
+def test_from_env_reads_the_llm_settings():
+    """The provider switch and the model limits come from the environment."""
+    env = dict(REQUIRED)
+    env.update(
+        {
+            "LLM_PROVIDER": "anthropic",
+            "LLM_BASE_URL": "http://model.internal:9000/v1",
+            "LLM_MODEL": "local-model",
+            "LLM_API_KEY": "local-key",
+            "LLM_TIMEOUT": "12.5",
+            "LLM_MAX_TOKENS": "2048",
+            "LLM_MAX_CONCURRENCY": "3",
+            "ANTHROPIC_API_KEY": "sk-test",
+        }
+    )
+
+    settings = from_env(env)
+
+    assert settings.llm_provider == "anthropic"
+    assert settings.llm_base_url == "http://model.internal:9000/v1"
+    assert settings.llm_model == "local-model"
+    assert settings.llm_api_key == "local-key"
+    assert settings.llm_timeout == 12.5
+    assert settings.llm_max_tokens == 2048
+    assert settings.llm_max_concurrency == 3
+    assert settings.anthropic_api_key == "sk-test"
+
+
+def test_from_env_starts_with_the_local_provider_without_the_anthropic_key():
+    """The default provider is local and it reads no Anthropic key at all."""
+    settings = from_env(dict(REQUIRED))
+    assert settings.llm_provider == "local"
+    assert settings.anthropic_api_key == ""
+
+    explicit = from_env({**REQUIRED, "LLM_PROVIDER": "local", "ANTHROPIC_API_KEY": ""})
+    assert explicit.llm_provider == "local"
+    assert explicit.anthropic_api_key == ""
+
+
+def test_from_env_treats_an_empty_provider_as_the_default():
+    """An empty optional variable behaves like an unset one."""
+    settings = from_env({**REQUIRED, "LLM_PROVIDER": "", "LLM_MAX_CONCURRENCY": ""})
+
+    assert settings.llm_provider == "local"
+    assert settings.llm_max_concurrency == 1
+
+
+def test_from_env_requires_the_anthropic_key_only_for_the_anthropic_provider():
+    """``LLM_PROVIDER=anthropic`` is the one case that needs the key."""
+    with pytest.raises(ConfigError) as error:
+        from_env({**REQUIRED, "LLM_PROVIDER": "anthropic"})
+
+    assert str(error.value) == "missing required environment variables: ANTHROPIC_API_KEY"
+
+
+def test_from_env_rejects_an_unknown_provider():
+    """A typo must fail at startup, naming the variable and both allowed values."""
+    with pytest.raises(ConfigError) as error:
+        from_env({**REQUIRED, "LLM_PROVIDER": "openai"})
+
+    message = str(error.value)
+    assert "LLM_PROVIDER" in message
+    assert "local" in message
+    assert "anthropic" in message
+    assert "openai" in message
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "17"])
+def test_from_env_rejects_a_concurrency_outside_the_range(value):
+    """A worker count below one would stall the pass; above 16 overloads the model."""
+    with pytest.raises(ConfigError) as error:
+        from_env({**REQUIRED, "LLM_MAX_CONCURRENCY": value})
+
+    message = str(error.value)
+    assert "LLM_MAX_CONCURRENCY" in message
+    assert value in message
+    assert "1" in message
+    assert "16" in message
+
+
+def test_from_env_rejects_a_non_integer_concurrency():
+    """A malformed worker count names the variable and the offending value."""
+    with pytest.raises(ConfigError) as error:
+        from_env({**REQUIRED, "LLM_MAX_CONCURRENCY": "three"})
+
+    assert str(error.value) == "LLM_MAX_CONCURRENCY must be an integer, got 'three'"
+
+
+def test_from_env_rejects_a_non_numeric_timeout():
+    """The timeout is a number of seconds, not a duration string."""
+    with pytest.raises(ConfigError) as error:
+        from_env({**REQUIRED, "LLM_TIMEOUT": "soon"})
+
+    assert str(error.value) == "LLM_TIMEOUT must be a number, got 'soon'"

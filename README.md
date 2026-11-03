@@ -44,7 +44,9 @@ uv sync --locked
 cp .env.example .env
 ```
 
-Set at least `DATABASE_URL` and `ANTHROPIC_API_KEY` in `.env`, then create the schema:
+Set at least `DATABASE_URL` in `.env`, then create the schema. The analysis calls need no key:
+their default provider is the local `gb10-writing` model; `ANTHROPIC_API_KEY` is read only when
+`LLM_PROVIDER=anthropic`.
 
 ```bash
 uv run newstrading init-db
@@ -68,9 +70,16 @@ Optional variables fall back to their default when absent **or empty**.
 | Variable | Required | Default | Meaning |
 |---|---|---|---|
 | `DATABASE_URL` | yes | – | PostgreSQL connection string |
-| `ANTHROPIC_API_KEY` | yes | – | Anthropic API key for the analysis calls |
-| `AI_MODEL` | no | `claude-3-5-haiku-20241022` | model id used for the analysis calls |
-| `MAX_TOKENS` | no | `512` | maximum tokens of one analysis response |
+| `ANTHROPIC_API_KEY` | only with `LLM_PROVIDER=anthropic` | – | Anthropic API key for the analysis calls |
+| `AI_MODEL` | no | `claude-3-5-haiku-20241022` | model id the Anthropic provider uses |
+| `MAX_TOKENS` | no | `512` | maximum tokens of one Anthropic answer |
+| `LLM_PROVIDER` | no | `local` | provider of the analysis calls: `local` (OpenAI-compatible) or `anthropic` |
+| `LLM_BASE_URL` | no | `http://192.168.178.87:8004/v1` | base URL of the local provider (`gb10-writing` on the GX10) |
+| `LLM_MODEL` | no | `gb10-writing` | model id sent to the local provider |
+| `LLM_API_KEY` | no | empty | bearer token of the local provider; empty sends no authorization header |
+| `LLM_TIMEOUT` | no | `60` | seconds one model call may take |
+| `LLM_MAX_TOKENS` | no | `1024` | maximum tokens of one local answer; leaves room for the reasoning prefix |
+| `LLM_MAX_CONCURRENCY` | no | `1` | model calls in flight in one analyze pass, between 1 and 16 |
 | `ANALYSIS_INTERVAL_MINUTES` | no | `5` | minutes between two analysis runs, greater than zero |
 | `CONTENT_MAX_LENGTH` | no | `2000` | characters of post content sent to the model |
 | `ALERT_SUMMARY_MAX_LENGTH` | no | `180` | characters of the alert summary |
@@ -99,7 +108,7 @@ uv run newstrading notify            # one notification pass over the alerts
 |---|---|---|
 | `init-db` | `DATABASE_URL` | creates the missing tables and indexes of `sql/schema.sql`; non-destructive, `--reset` drops the tables first (see `sql/reset.sql`) |
 | `collect` | `DATABASE_URL` | runs every configured source for every asset, stores the new posts |
-| `analyze` | `DATABASE_URL`, `ANTHROPIC_API_KEY` | analyses the waiting posts, stores the alerts, refreshes the daily metrics |
+| `analyze` | `DATABASE_URL`, and `ANTHROPIC_API_KEY` with `LLM_PROVIDER=anthropic` | analyses the waiting posts, stores the alerts, refreshes the daily metrics |
 | `notify` | `DATABASE_URL` | sends the pending notifications over the configured channels |
 
 Exit codes: `0` success, `2` missing or invalid configuration (the message names the variable),
@@ -146,8 +155,9 @@ Premium alternatives for congressional trades:
 - [Benzinga Government Trades API](https://www.benzinga.com/apis/cloud-product/government-trades/)
 - [Financial Modeling Prep Senate Trading API](https://site.financialmodelingprep.com/developer/docs/senate-trading-api)
 
-The analysis model is Anthropic's Claude; a key is created at
-[console.anthropic.com](https://console.anthropic.com/).
+The analysis model behind the default provider is `gb10-writing` on the GX10 — OpenAI-compatible,
+no key. Setting `LLM_PROVIDER=anthropic` switches the calls to Anthropic's Claude instead; a key for
+that provider is created at [console.anthropic.com](https://console.anthropic.com/).
 
 ## License
 
