@@ -137,6 +137,20 @@ One image runs every command: `docker compose run app analyze` runs one analysis
 command of the `app` service is `collect`. The `postgres` service mounts `sql/schema.sql` as its
 initialisation script.
 
+## Dashboard
+
+The monitoring dashboard is an Angular SPA in `web/`; the Python package serves its build from
+`web/dist` and the API under `/api` from one process (`newstrading dashboard`, #56). Build it with
+Node 22 or newer, then start the command:
+
+```bash
+cd web && npm ci && npx ng build && cd ..
+uv run newstrading dashboard --port 8088
+```
+
+`cd web && npm start` serves the same app on port 4200 for development and proxies `/api` to
+`127.0.0.1:8088`.
+
 ## Data sources
 
 Free, no key needed:

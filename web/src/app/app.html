@@ -1,0 +1,28 @@
+<header class="topbar">
+  <a class="brand" routerLink="/" aria-label="newstrading overview">
+    <img class="mark" src="mark.svg" alt="" width="28" height="28" />
+    <span class="wordmark">newstrading</span>
+  </a>
+  <nav class="nav" aria-label="Screens">
+    @for (item of nav; track item.path) {
+      <a
+        [routerLink]="'/' + item.path"
+        routerLinkActive="active"
+        [routerLinkActiveOptions]="{ exact: item.path === '' }"
+        [title]="item.hint"
+        >{{ item.label }}</a
+      >
+    }
+  </nav>
+  <div class="spacer"></div>
+  <span class="tag">read-only</span>
+</header>
+
+<main class="content">
+  <router-outlet />
+</main>
+
+<footer class="footer">
+  <span>newstrading tracks news and congressional-trade disclosures</span>
+  <span data-testid="version">v{{ version }}</span>
+</footer>
