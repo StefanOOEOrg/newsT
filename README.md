@@ -101,6 +101,7 @@ uv run newstrading init-db           # create the missing tables, keep the exist
 uv run newstrading init-db --reset   # drop every table first (destroys all data)
 uv run newstrading collect           # one collection pass over every configured source
 uv run newstrading analyze           # one analysis pass over the waiting posts
+uv run newstrading analyze --llm-max-concurrency 3   # same pass, three calls in flight
 uv run newstrading notify            # one notification pass over the alerts
 ```
 
@@ -114,6 +115,9 @@ uv run newstrading notify            # one notification pass over the alerts
 Exit codes: `0` success, `2` missing or invalid configuration (the message names the variable),
 `1` a runtime failure. `uv run newstrading --help` and `--version` print without touching the
 database.
+
+`analyze` also takes `--llm-provider`, `--llm-max-tokens` and `--llm-max-concurrency`; a flag
+replaces its environment variable for that run only and passes the same validation.
 
 ## Tests
 
