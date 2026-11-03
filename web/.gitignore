@@ -1,0 +1,12 @@
+# Compiled output
+/dist
+
+# Node
+/node_modules
+npm-debug.log
+
+# Angular CLI cache
+/.angular/cache
+
+# Test output
+/coverage

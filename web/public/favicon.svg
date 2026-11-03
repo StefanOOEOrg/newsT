@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="newstrading">
+  <title>newstrading</title>
+  <rect width="512" height="512" rx="112" fill="#171a21" />
+  <rect x="6" y="6" width="500" height="500" rx="106" fill="none" stroke="#262b36" stroke-width="12" />
+  <rect x="104" y="280" width="64" height="120" rx="24" fill="#7c5cff" fill-opacity="0.55" />
+  <rect x="200" y="216" width="64" height="184" rx="24" fill="#7c5cff" fill-opacity="0.8" />
+  <rect x="296" y="136" width="64" height="264" rx="24" fill="#7c5cff" />
+  <circle cx="376" cy="128" r="36" fill="#e7e9ee" />
+</svg>
