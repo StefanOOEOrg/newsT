@@ -6,9 +6,11 @@ builds their prompt, calls the model, parses the answer and writes one row per p
 ``ai_analysis`` — the service the CLI's ``analyze`` command runs.
 
 The database connection, the model call and the sleep are injected, so the analyzer is
-testable without a database, a socket or a real wait. The retry policy and the neutral
-fallback are the legacy ones: a post is not retried forever, but an answer that arrives
-empty (content moderation) is still stored, with a neutral analysis.
+testable without a database, a socket or a real wait. The retry policy is the legacy
+one: a post is not retried forever. An empty answer is retried when the completion
+raises :class:`~newstrading.analysis.llm.RetryableModelError` — which the adapters do —
+and stored as the neutral analysis only when a completion hands back an empty string
+instead (the content-moderation case the legacy callable encoded).
 """
 
 from __future__ import annotations
@@ -19,8 +21,8 @@ from collections.abc import Callable
 from typing import Any
 
 import psycopg2
-from anthropic import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
+from newstrading.analysis.llm import RetryableModelError
 from newstrading.analysis.parser import Analysis, AnalysisParseError, parse_analysis
 from newstrading.analysis.prompt import PromptBuilder, database_prompt_loader
 from newstrading.collectors.models import Asset, Post
@@ -39,8 +41,14 @@ Sleep = Callable[[float], None]
 RETRY_DELAYS = (2, 4, 8)
 """Seconds to wait through ``sleep`` for the three attempts of one model call."""
 
-RETRYABLE_ERRORS = (RateLimitError, InternalServerError, APITimeoutError, APIConnectionError)
-"""Failures of the model call that are worth another attempt — the legacy four."""
+RETRYABLE_ERRORS = (RetryableModelError,)
+"""Failures of the model call that are worth another attempt.
+
+:class:`RetryableModelError` is what the clients of
+:mod:`newstrading.analysis.llm` raise — an empty answer (a spent token budget) is one of
+them. A terminal :class:`~newstrading.analysis.llm.ModelError` is not in the tuple and
+skips the post at once.
+"""
 
 NEUTRAL_ANALYSIS = Analysis(
     sentiment="neutral",
@@ -146,8 +154,8 @@ class Analyzer:
         Args:
             settings: Settings holding ``database_url`` and ``content_max_length``.
             connector: Connection factory; tests inject a fake.
-            complete: The model call. Production adds the ``sentiment:`` prefill and
-                returns the text the model answered.
+            complete: The model call. Production is ``build_client(settings).complete``;
+                it returns the raw text the model answered.
             sleep: Called with each retry delay; injected so tests do not wait.
             builder: Prompt builder. Defaults to one that reads the template from the
                 database once per run and cuts the content to

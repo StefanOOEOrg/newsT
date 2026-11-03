@@ -13,14 +13,12 @@ import os
 import sys
 import traceback
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from anthropic import Anthropic
-
 from newstrading import __version__
 from newstrading.analysis.alerts import AlertGenerator
+from newstrading.analysis.llm import build_client
 from newstrading.analysis.metrics import update_daily_metrics
 from newstrading.analysis.parser import Analysis
 from newstrading.collectors.assets import AssetStore
@@ -28,7 +26,16 @@ from newstrading.collectors.factories import SOURCE_NAMES, build_registry
 from newstrading.collectors.posts import PostStore
 from newstrading.collectors.prices import PriceStore, StockPriceCollector
 from newstrading.collectors.registry import CollectorError
-from newstrading.config import Settings, from_env
+from newstrading.config import (
+    DEFAULT_LLM_BASE_URL,
+    DEFAULT_LLM_MAX_CONCURRENCY,
+    DEFAULT_LLM_MAX_TOKENS,
+    DEFAULT_LLM_MODEL,
+    DEFAULT_LLM_TIMEOUT,
+    LLM_MAX_CONCURRENCY_RANGE,
+    Settings,
+    from_env,
+)
 from newstrading.db import connect
 from newstrading.errors import CollectorConfigError, ConfigError, NewsTradingError
 from newstrading.keywords import KeywordTracker
@@ -50,15 +57,27 @@ COMMANDS = ("init-db", "collect", "analyze", "notify", "dashboard")
 REQUIRED_VARIABLES: dict[str, tuple[str, ...]] = {
     "init-db": ("DATABASE_URL",),
     "collect": ("DATABASE_URL",),
-    "analyze": ("DATABASE_URL", "ANTHROPIC_API_KEY"),
+    # The model calls need no key: an empty ``LLM_API_KEY`` sends no header.
+    "analyze": ("DATABASE_URL",),
     "notify": ("DATABASE_URL",),
     "dashboard": ("DATABASE_URL",),
 }
 
+LLM_FLAGS: tuple[tuple[str, str], ...] = (
+    ("llm_base_url", "LLM_BASE_URL"),
+    ("llm_model", "LLM_MODEL"),
+    ("llm_api_key", "LLM_API_KEY"),
+    ("llm_timeout", "LLM_TIMEOUT"),
+    ("llm_max_tokens", "LLM_MAX_TOKENS"),
+    ("llm_max_concurrency", "LLM_MAX_CONCURRENCY"),
+    ("llm_fallback", "LLM_FALLBACK"),
+    ("llm_fallback_model", "LLM_FALLBACK_MODEL"),
+    ("llm_fallback_api_key", "LLM_FALLBACK_API_KEY"),
+)
+"""Arguments of ``analyze`` and the variable each one replaces for that run."""
+
 _SCHEMA_FILE = "schema.sql"
 _RESET_FILE = "reset.sql"
-_UNUSED_ANALYSIS_KEY = "not-configured"
-_PREFILL = "sentiment:"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -86,7 +105,62 @@ def build_parser() -> argparse.ArgumentParser:
         help="drop every table of the schema before creating it again (destroys all data)",
     )
     commands.add_parser("collect", help="run one collection pass over every source")
-    commands.add_parser("analyze", help="run one analysis pass over the waiting posts")
+    analysis = commands.add_parser(
+        "analyze",
+        help="run one analysis pass over the waiting posts",
+        description="Run one analysis pass. The LLM flags replace their environment "
+        "variable for this run only; without them the LLM_* variables of the environment "
+        "apply.",
+    )
+    analysis.add_argument(
+        "--llm-base-url",
+        metavar="URL",
+        help="base URL of the analysis endpoint, replaces LLM_BASE_URL "
+        f"(default: {DEFAULT_LLM_BASE_URL})",
+    )
+    analysis.add_argument(
+        "--llm-model",
+        metavar="ID",
+        help=f"model id sent to the endpoint, replaces LLM_MODEL (default: {DEFAULT_LLM_MODEL})",
+    )
+    analysis.add_argument(
+        "--llm-api-key",
+        metavar="KEY",
+        help="bearer token of the endpoint, replaces LLM_API_KEY (empty sends none)",
+    )
+    analysis.add_argument(
+        "--llm-timeout",
+        metavar="SECONDS",
+        help=f"seconds one call may take, replaces LLM_TIMEOUT (default: {DEFAULT_LLM_TIMEOUT})",
+    )
+    analysis.add_argument(
+        "--llm-max-tokens",
+        metavar="N",
+        help="token budget of one answer, replaces LLM_MAX_TOKENS "
+        f"(default: {DEFAULT_LLM_MAX_TOKENS})",
+    )
+    analysis.add_argument(
+        "--llm-max-concurrency",
+        metavar="N",
+        help="model calls in flight, replaces LLM_MAX_CONCURRENCY "
+        f"(default: {DEFAULT_LLM_MAX_CONCURRENCY}; "
+        f"{LLM_MAX_CONCURRENCY_RANGE[0]}..{LLM_MAX_CONCURRENCY_RANGE[1]})",
+    )
+    analysis.add_argument(
+        "--llm-fallback",
+        metavar="URL",
+        help="second endpoint used when the primary fails retryably, replaces LLM_FALLBACK",
+    )
+    analysis.add_argument(
+        "--llm-fallback-model",
+        metavar="ID",
+        help="model id of the fallback endpoint, replaces LLM_FALLBACK_MODEL (default: LLM_MODEL)",
+    )
+    analysis.add_argument(
+        "--llm-fallback-api-key",
+        metavar="KEY",
+        help="bearer token of the fallback endpoint, replaces LLM_FALLBACK_API_KEY",
+    )
     commands.add_parser("notify", help="run one notification pass")
     dashboard = commands.add_parser(
         "dashboard",
@@ -117,7 +191,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         # ``--help`` and ``--version`` end here, as does a missing command (usage, code 2).
         return int(stop.code or EXIT_OK)
     try:
-        settings = settings_for(arguments.command)
+        settings = settings_for(arguments.command, overrides=vars(arguments))
         configure_logging(settings)
         reset = getattr(arguments, "reset", False)
         port = getattr(arguments, "port", DEFAULT_DASHBOARD_PORT)
@@ -132,12 +206,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         return EXIT_FAILURE
 
 
-def settings_for(command: str, environ: Mapping[str, str] | None = None) -> Settings:
-    """Build the settings one command needs from the environment.
+def settings_for(
+    command: str,
+    environ: Mapping[str, str] | None = None,
+    overrides: Mapping[str, str | None] | None = None,
+) -> Settings:
+    """Build the settings one command needs from the environment and its flags.
 
     Args:
         command: The sub-command that will run.
         environ: Mapping to read; ``None`` (the default) means ``os.environ``.
+        overrides: Values given as flags of ``analyze``, keyed by the settings field
+            they replace (see :data:`LLM_FLAGS`). A value given here wins over its
+            variable; ``None`` leaves the variable in charge.
 
     Returns:
         Settings with the variables of that command resolved.
@@ -146,19 +227,15 @@ def settings_for(command: str, environ: Mapping[str, str] | None = None) -> Sett
         ConfigError: If a variable the command needs is missing or empty, or if a
             configured value is invalid. The message names the variables.
     """
-    source = os.environ if environ is None else environ
-    missing = [name for name in REQUIRED_VARIABLES[command] if not source.get(name)]
+    values = dict(os.environ if environ is None else environ)
+    for field, variable in LLM_FLAGS:
+        value = (overrides or {}).get(field)
+        if value is not None:
+            values[variable] = value
+    missing = [name for name in REQUIRED_VARIABLES[command] if not values.get(name)]
     if missing:
         raise ConfigError(f"missing required environment variables: {', '.join(missing)}")
-    values = dict(source)
-    if command != "analyze":
-        # ``from_env`` validates the model key for every command; only ``analyze`` uses it,
-        # so the other commands hand it a placeholder and drop it again below.
-        values.setdefault("ANTHROPIC_API_KEY", _UNUSED_ANALYSIS_KEY)
-    settings = from_env(values)
-    if command == "analyze":
-        return settings
-    return replace(settings, anthropic_api_key=source.get("ANTHROPIC_API_KEY", ""))
+    return from_env(values)
 
 
 def run_command(
@@ -399,33 +476,15 @@ def _completion(settings: Settings) -> Callable[[str], str]:
     """Return the model call the analyzer uses: one prompt in, raw answer text out.
 
     Args:
-        settings: Settings holding the model id, the token limit and the API key.
+        settings: Settings holding the endpoint, the model, the key, the timeout, the
+            budget and the optional fallback endpoint.
 
     Returns:
-        A callable that sends the prompt with the legacy ``sentiment:`` prefill. An
-        empty answer becomes ``""`` — the analyzer stores its neutral analysis for it.
-        An answer that ignored the prefill and starts with JSON or a fence is returned
-        unchanged, so the parser reads what the model actually said.
+        ``complete`` of the client :func:`~newstrading.analysis.llm.build_client`
+        builds. A retryable failure of the primary endpoint is answered by the
+        configured fallback; a terminal failure propagates to the analyzer.
     """
-    client = Anthropic(api_key=settings.anthropic_api_key)
-
-    def complete(prompt: str) -> str:
-        message = client.messages.create(
-            model=settings.ai_model,
-            max_tokens=settings.max_tokens,
-            messages=[
-                {"role": "user", "content": prompt},
-                {"role": "assistant", "content": _PREFILL},
-            ],
-        )
-        if not message.content:
-            return ""
-        text = getattr(message.content[0], "text", "")
-        if text.lstrip().startswith(("{", "```")):
-            return text
-        return _PREFILL + text
-
-    return complete
+    return build_client(settings).complete
 
 
 if __name__ == "__main__":

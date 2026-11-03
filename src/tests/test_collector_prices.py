@@ -20,7 +20,7 @@ from newstrading.config import Settings
 from newstrading.rate_limiter import RateLimitDecision
 
 URL = "postgresql://app:***@db.internal:5432/newstrading"
-SETTINGS = Settings(database_url=URL, anthropic_api_key="sk-test")
+SETTINGS = Settings(database_url=URL)
 ASSET = Asset(id=7, name="Tesla", ticker="TSLA", keywords=("tesla",))
 FIRST = datetime(2026, 11, 2, 14, 30)
 SECOND = datetime(2026, 11, 2, 14, 35, tzinfo=UTC)

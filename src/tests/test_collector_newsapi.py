@@ -23,7 +23,6 @@ def make_settings(*, newsapi_key: str = "newsapi-key") -> Settings:
     """Build settings with a NewsAPI key unless a test overrides it."""
     return Settings(
         database_url="postgresql://user:pw@localhost:5432/newstrading",
-        anthropic_api_key="sk-test",
         newsapi_key=newsapi_key,
     )
 

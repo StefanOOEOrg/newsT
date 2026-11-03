@@ -12,7 +12,7 @@ from newstrading.collectors.stats import (
 from newstrading.config import Settings
 
 URL = "postgresql://app:pw@db.internal:5432/newstrading"
-SETTINGS = Settings(database_url=URL, anthropic_api_key="sk-test")
+SETTINGS = Settings(database_url=URL)
 STARTED = datetime(2026, 11, 1, 9, 0, tzinfo=UTC)
 
 

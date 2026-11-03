@@ -20,7 +20,7 @@ from newstrading.collectors.models import Asset, Post
 from newstrading.config import Settings
 
 URL = "postgresql://app:***@db.internal:5432/newstrading"
-SETTINGS = Settings(database_url=URL, anthropic_api_key="sk-test")
+SETTINGS = Settings(database_url=URL)
 
 POST = Post(
     asset_id=7,

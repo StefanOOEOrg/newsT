@@ -22,7 +22,7 @@ from newstrading.config import Settings
 
 ROOT = Path(__file__).resolve().parents[2]
 URL = "postgresql://app:secret@db.internal:5432/newstrading"
-SETTINGS = Settings(database_url=URL, anthropic_api_key="sk-test")
+SETTINGS = Settings(database_url=URL)
 KEYED_SETTINGS = replace(
     SETTINGS,
     newsapi_key="newsapi-key",
@@ -34,7 +34,15 @@ COMMANDS = ("init-db", "collect", "analyze", "notify", "dashboard")
 
 CONFIGURED = (
     "DATABASE_URL",
-    "ANTHROPIC_API_KEY",
+    "LLM_BASE_URL",
+    "LLM_MODEL",
+    "LLM_API_KEY",
+    "LLM_TIMEOUT",
+    "LLM_MAX_TOKENS",
+    "LLM_MAX_CONCURRENCY",
+    "LLM_FALLBACK",
+    "LLM_FALLBACK_MODEL",
+    "LLM_FALLBACK_API_KEY",
     "NEWSAPI_KEY",
     "FINNHUB_API_KEY",
     "ALPHAVANTAGE_API_KEY",
@@ -260,9 +268,8 @@ def test_main_collect_dispatches_to_the_collection_pass(environment):
 
 
 def test_main_analyze_dispatches_to_the_analysis_pass(environment):
-    """``analyze`` runs exactly one pass and needs the model key."""
+    """``analyze`` runs exactly one pass with the resolved settings."""
     environment.setenv("DATABASE_URL", URL)
-    environment.setenv("ANTHROPIC_API_KEY", "sk-test")
     calls = []
     environment.setattr(
         "newstrading.cli.analyze_pending", lambda settings: calls.append(settings) or 0
@@ -270,63 +277,35 @@ def test_main_analyze_dispatches_to_the_analysis_pass(environment):
 
     assert main(["analyze"]) == 0
 
-    assert [settings.anthropic_api_key for settings in calls] == ["sk-test"]
+    assert [settings.database_url for settings in calls] == [URL]
 
 
-class FakeTextBlock:
-    """One content block of a model answer."""
-
-    def __init__(self, text):
-        self.text = text
-
-
-class FakeMessage:
-    """A model answer with the given content blocks."""
-
-    def __init__(self, texts):
-        self.content = [FakeTextBlock(text) for text in texts]
-
-
-class FakeClient:
-    """Stands in for ``anthropic.Anthropic`` and answers from a list."""
+class FakeCompletionClient:
+    """Stands in for the client of ``build_client`` and answers from a list."""
 
     def __init__(self, answers):
         self.answers = list(answers)
-        self.requests = []
-        self.api_key = None
+        self.prompts = []
 
-    def __call__(self, api_key):
-        self.api_key = api_key
-        return self
-
-    @property
-    def messages(self):
-        return self
-
-    def create(self, **kwargs):
-        self.requests.append(kwargs)
-        return FakeMessage(self.answers.pop(0))
+    def complete(self, prompt):
+        self.prompts.append(prompt)
+        return self.answers.pop(0)
 
 
-def test_the_model_call_adds_the_legacy_prefill_and_keeps_a_json_answer(environment):
-    """The completion sends the prompt with the prefill and returns the raw answer."""
-    client = FakeClient([["positive\nsentiment_score: 0.8"], ['{"sentiment": "negative"}'], []])
-    environment.setattr("newstrading.cli.Anthropic", client)
+def test_the_model_call_is_the_completion_of_the_factory_client(environment):
+    """``_completion`` returns ``build_client(settings).complete``; the text passes raw."""
+    client = FakeCompletionClient(["a fenced answer", ""])
+    built = []
+    environment.setattr(
+        "newstrading.cli.build_client", lambda settings: built.append(settings) or client
+    )
 
     complete = _completion(SETTINGS)
 
-    assert complete("the prompt") == "sentiment:positive\nsentiment_score: 0.8"
-    assert complete("the prompt") == '{"sentiment": "negative"}'
+    assert complete("the prompt") == "a fenced answer"
     assert complete("the prompt") == ""
-    assert client.api_key == "sk-test"
-    assert client.requests[0] == {
-        "model": SETTINGS.ai_model,
-        "max_tokens": SETTINGS.max_tokens,
-        "messages": [
-            {"role": "user", "content": "the prompt"},
-            {"role": "assistant", "content": "sentiment:"},
-        ],
-    }
+    assert client.prompts == ["the prompt", "the prompt"]
+    assert built == [SETTINGS]
 
 
 def test_analyze_generates_alerts_per_analysis_and_updates_the_metrics_once(environment, caplog):
@@ -336,7 +315,6 @@ def test_analyze_generates_alerts_per_analysis_and_updates_the_metrics_once(envi
     what this test covers, not the batch itself (that is #37). No network, no database.
     """
     environment.setenv("DATABASE_URL", URL)
-    environment.setenv("ANTHROPIC_API_KEY", "sk-test")
     analyses = [object(), object()]
     asset_id = 7
     order = []
@@ -480,17 +458,18 @@ def test_missing_database_url_does_not_run_the_bootstrap(environment, capsys):
     assert "DATABASE_URL" in capsys.readouterr().err
 
 
-def test_analyze_without_the_model_key_exits_2_and_names_it(environment, capsys):
-    """``analyze`` alone needs ``ANTHROPIC_API_KEY``; it exits 2 before any analysis."""
+def test_analyze_needs_only_the_database_url(environment):
+    """``DATABASE_URL`` alone starts the pass; the key may stay empty."""
     environment.setenv("DATABASE_URL", URL)
     calls = []
-    environment.setattr("newstrading.cli.analyze_pending", calls.append)
+    environment.setattr(
+        "newstrading.cli.analyze_pending", lambda settings: calls.append(settings) or 0
+    )
 
-    assert main(["analyze"]) == 2
+    assert main(["analyze"]) == 0
 
-    error = capsys.readouterr().err
-    assert "ANTHROPIC_API_KEY" in error
-    assert calls == []
+    assert [settings.llm_api_key for settings in calls] == [""]
+    assert [settings.llm_base_url for settings in calls] == ["http://192.168.178.87:8004/v1"]
 
 
 def test_collect_builds_only_the_sources_without_a_key(environment):

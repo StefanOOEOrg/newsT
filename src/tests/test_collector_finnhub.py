@@ -25,7 +25,6 @@ def make_settings(*, finnhub_api_key: str = "finnhub-key") -> Settings:
     """Build settings with a Finnhub key unless a test overrides it."""
     return Settings(
         database_url="postgresql://user:pw@localhost:5432/newstrading",
-        anthropic_api_key="sk-test",
         finnhub_api_key=finnhub_api_key,
     )
 

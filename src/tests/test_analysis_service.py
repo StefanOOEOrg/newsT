@@ -9,21 +9,15 @@ from ``analyzer/main.py``; the parsing comes from :mod:`newstrading.analysis.par
 
 from datetime import datetime
 
-import httpx
 import pytest
-from anthropic import (
-    APIConnectionError,
-    APITimeoutError,
-    InternalServerError,
-    RateLimitError,
-)
 
+from newstrading.analysis.llm import RetryableModelError
 from newstrading.analysis.parser import Analysis
 from newstrading.analysis.service import AnalysisError, Analyzer
 from newstrading.config import Settings
 
 URL = "postgresql://app:***@db.internal:5432/newstrading"
-SETTINGS = Settings(database_url=URL, anthropic_api_key="sk-test")
+SETTINGS = Settings(database_url=URL)
 
 CREATED_AT = datetime(2026, 1, 5, 14, 30)
 
@@ -180,30 +174,6 @@ def make_analyzer(
     )
 
 
-def _message_request():
-    return httpx.Request("POST", "https://api.anthropic.com/v1/messages")
-
-
-def rate_limit_error():
-    return RateLimitError(
-        "slow down", response=httpx.Response(429, request=_message_request()), body=None
-    )
-
-
-def internal_server_error():
-    return InternalServerError(
-        "overloaded", response=httpx.Response(529, request=_message_request()), body=None
-    )
-
-
-def timeout_error():
-    return APITimeoutError(request=_message_request())
-
-
-def connection_error():
-    return APIConnectionError(request=_message_request())
-
-
 # --- the select ---------------------------------------------------------------------
 
 
@@ -277,7 +247,7 @@ def test_the_builder_receives_the_post_and_asset_from_the_row():
 
 
 def test_the_default_builder_loads_the_template_once_per_run_and_cuts_the_content():
-    settings = Settings(database_url=URL, anthropic_api_key="sk-test", content_max_length=10)
+    settings = Settings(database_url=URL, content_max_length=10)
     connection = FakeConnection(
         [
             post_row(row_id=1, source_post_id="p-1", content="x" * 30),
@@ -324,13 +294,12 @@ def test_an_empty_answer_stores_the_neutral_analysis(answer):
 # --- retries ------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "make_error",
-    [rate_limit_error, internal_server_error, timeout_error, connection_error],
-)
-def test_a_retryable_error_is_retried_three_times_with_the_legacy_delays(make_error):
+@pytest.mark.parametrize("message", ["rate limited", "overloaded", "timed out", "connection lost"])
+def test_a_retryable_error_is_retried_three_times_with_the_legacy_delays(message):
     connection = FakeConnection([post_row()])
-    model = FakeModel(make_error(), make_error(), make_error())
+    model = FakeModel(
+        RetryableModelError(message), RetryableModelError(message), RetryableModelError(message)
+    )
     sleep = FakeSleep()
     analyzer = make_analyzer(connection, model, sleep=sleep)
 
@@ -345,7 +314,8 @@ def test_a_retryable_error_is_retried_three_times_with_the_legacy_delays(make_er
 def test_a_retryable_error_then_a_good_answer_stores_the_analysis():
     connection = FakeConnection([post_row()])
     sleep = FakeSleep()
-    analyzer = make_analyzer(connection, FakeModel(rate_limit_error(), ANSWER), sleep=sleep)
+    model = FakeModel(RetryableModelError("slow down"), ANSWER)
+    analyzer = make_analyzer(connection, model, sleep=sleep)
 
     stored = analyzer.analyze_pending()
 

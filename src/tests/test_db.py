@@ -8,7 +8,7 @@ from newstrading.db import DatabaseError, connect, connection
 from newstrading.errors import NewsTradingError
 
 URL = "postgresql://app:secret-pw@db.internal:5432/newstrading"
-SETTINGS = Settings(database_url=URL, anthropic_api_key="sk-test")
+SETTINGS = Settings(database_url=URL)
 
 
 class FakeConnection:

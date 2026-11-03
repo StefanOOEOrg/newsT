@@ -10,7 +10,7 @@ from newstrading.dashboard import api
 from newstrading.dashboard.api import DEFAULT_PER_PAGE, MAX_PER_PAGE, build_app, serve
 
 URL = "postgresql://app:***@db.internal:5432/newstrading"
-SETTINGS = Settings(database_url=URL, anthropic_api_key="sk-test")
+SETTINGS = Settings(database_url=URL)
 
 LIST_ROUTES = ("/api/posts", "/api/alerts", "/api/keywords", "/api/logs")
 

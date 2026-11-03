@@ -17,7 +17,7 @@ from newstrading.config import Settings
 ALERT_DAY = datetime(2026, 1, 5, 14, 30)
 ALERT_DATE = ALERT_DAY.date()
 
-SETTINGS = Settings(database_url="postgresql://localhost:5432/newstrading", anthropic_api_key="k")
+SETTINGS = Settings(database_url="postgresql://localhost:5432/newstrading")
 
 # (ap.id, ap.alert_date, c.ticker, ap.price_at_alert)
 
