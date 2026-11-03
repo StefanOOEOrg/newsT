@@ -377,6 +377,92 @@ def test_logs_passes_the_level_filter_to_count_and_page():
     assert all("ERROR" in parameters for _statement, parameters in connection.statements)
 
 
+def test_performance_answers_every_horizon_and_the_per_type_rows():
+    """One aggregate row per horizon plus the per-type 7d rows, rates at three decimals."""
+    totals = (42, 27, 10, 5)
+    by_type = [("price_spike", 12, 8), ("volume_spike", 4, 0)]
+    client, _ = build_client((totals,), by_type)
+
+    response = client.get("/api/performance")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "horizons": [
+            {"horizon": "1d", "alerts": 42, "correct": 27, "hit_rate": 0.643},
+            {"horizon": "3d", "alerts": 42, "correct": 10, "hit_rate": 0.238},
+            {"horizon": "7d", "alerts": 42, "correct": 5, "hit_rate": 0.119},
+        ],
+        "by_type": [
+            {
+                "alert_type": "price_spike",
+                "horizon": "7d",
+                "alerts": 12,
+                "correct": 8,
+                "hit_rate": 0.667,
+            },
+            {
+                "alert_type": "volume_spike",
+                "horizon": "7d",
+                "alerts": 4,
+                "correct": 0,
+                "hit_rate": 0.0,
+            },
+        ],
+    }
+
+
+def test_performance_on_an_empty_table_lists_three_horizons_with_a_null_hit_rate():
+    """No performance row yet is three honest zero horizons whose hit rate is null."""
+    client, _ = build_client()
+
+    response = client.get("/api/performance")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "horizons": [
+            {"horizon": "1d", "alerts": 0, "correct": 0, "hit_rate": None},
+            {"horizon": "3d", "alerts": 0, "correct": 0, "hit_rate": None},
+            {"horizon": "7d", "alerts": 0, "correct": 0, "hit_rate": None},
+        ],
+        "by_type": [],
+    }
+
+
+def test_null_correctness_is_not_counted_as_correct():
+    """Only a true boolean counts; a NULL is not correct, so the filter says IS TRUE."""
+    client, connection = build_client(((0, 0, 0, 0),), [])
+
+    client.get("/api/performance")
+
+    statements = " ".join(statement for statement, _parameters in connection.statements)
+    for horizon in ("1d", "3d", "7d"):
+        assert f"FILTER (WHERE correct_{horizon} IS TRUE)" in statements
+    assert "IS NOT FALSE" not in statements
+
+
+def test_performance_answers_503_when_the_database_fails():
+    """The performance route fails like every other route: one documented 503 body."""
+    client, _ = build_client(error=RuntimeError('relation "alert_performance" does not exist'))
+
+    response = client.get("/api/performance")
+
+    assert response.status_code == 503
+    assert response.json() == {"error": "database unavailable"}
+    assert "alert_performance" not in response.text
+
+
+def test_the_performance_route_is_a_get_route():
+    """The performance answer joins the read-only route table."""
+    app = build_app(SETTINGS, connector=lambda url: FakeConnection())
+    routes = {
+        route.path: getattr(route, "methods", None) or set()
+        for route in app.routes
+        if route.path == "/api/performance"
+    }
+
+    assert routes == {"/api/performance": {"GET"}}
+
+
 @pytest.mark.parametrize("route", LIST_ROUTES)
 def test_an_empty_table_answers_an_empty_page(route):
     """``{"items": [], "total": 0, …}`` is the answer of an empty table, not an error."""
