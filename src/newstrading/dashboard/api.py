@@ -1,9 +1,10 @@
 """The read-only dashboard API and the command that serves it.
 
-Six GET routes answer the six dashboard screens: the overview counters, the posts with
+Seven GET routes answer the dashboard screens: the overview counters, the posts with
 their analysis, the alerts with their performance, the keyword performance, the source
-health and the system logs. Every answer is read-only by construction — no route accepts
-a write method — and a database that cannot be reached is one documented 503 body.
+health and the system logs, plus the alert performance aggregated per horizon and type.
+Every answer is read-only by construction — no route accepts a write method — and a
+database that cannot be reached is one documented 503 body.
 
 ``build_app`` takes the connector so the tests run without a database; production uses
 :func:`psycopg2.connect` like every other store of the package.
@@ -199,6 +200,25 @@ _LOGS_PAGE = f"""
 
 _Statement = tuple[str, tuple[Any, ...]]
 
+_PERFORMANCE_HORIZONS = ("1d", "3d", "7d")
+"""The correctness columns ``alert_performance`` actually fills; returns go further."""
+
+_PERFORMANCE_TOTALS = """
+    SELECT COUNT(*),
+           COUNT(*) FILTER (WHERE correct_1d IS TRUE),
+           COUNT(*) FILTER (WHERE correct_3d IS TRUE),
+           COUNT(*) FILTER (WHERE correct_7d IS TRUE)
+    FROM alert_performance
+"""
+_PERFORMANCE_BY_TYPE = """
+    SELECT alert_type,
+           COUNT(*),
+           COUNT(*) FILTER (WHERE correct_7d IS TRUE)
+    FROM alert_performance
+    GROUP BY alert_type
+    ORDER BY alert_type
+"""
+
 
 class DatabaseUnavailable(Exception):
     """Raised when a dashboard query cannot reach the database."""
@@ -214,7 +234,7 @@ def build_app(settings: Settings, *, connector: Connector = psycopg2.connect) ->
             :func:`psycopg2.connect`; tests inject a fake.
 
     Returns:
-        The FastAPI application with the six GET routes and one exception handler that
+        The FastAPI application with the seven GET routes and one exception handler that
         turns :class:`DatabaseUnavailable` into a 503 with
         ``{"error": "database unavailable"}``.
 
@@ -328,6 +348,32 @@ def build_app(settings: Settings, *, connector: Connector = psycopg2.connect) ->
         )
         return _page(_LOGS_COLUMNS, items, _total(count), page, limit)
 
+    @app.get("/api/performance")
+    def performance() -> dict[str, Any]:
+        """Hit rate per horizon and per alert type, aggregated by the database.
+
+        One aggregate row answers the three correctness horizons ``alert_performance``
+        fills (1d, 3d, 7d) and one aggregate row per alert type answers the 7d rate.
+        ``hit_rate`` is ``null`` when a horizon has no alert — the screens render the
+        em dash, never ``0 %`` — and is rounded to three decimals otherwise.
+        """
+        totals_rows, by_type = _fetch(
+            settings,
+            connector,
+            [
+                (_PERFORMANCE_TOTALS, ()),
+                (_PERFORMANCE_BY_TYPE, ()),
+            ],
+        )
+        alerts, *correct = totals_rows[0] if totals_rows else (0, 0, 0, 0)
+        return {
+            "horizons": [
+                _horizon_row(horizon, int(alerts), int(hit))
+                for horizon, hit in zip(_PERFORMANCE_HORIZONS, correct, strict=True)
+            ],
+            "by_type": [_type_row(*row) for row in by_type],
+        }
+
     return app
 
 
@@ -431,3 +477,31 @@ def _items(columns: tuple[str, ...], rows: list[tuple[Any, ...]]) -> list[dict[s
 def _total(count: list[tuple[Any, ...]]) -> int:
     """Return the number of the count query; a missing row is zero."""
     return int(count[0][0]) if count else 0
+
+
+def _hit_rate(alerts: int, correct: int) -> float | None:
+    """Return ``correct / alerts`` rounded to three decimals, or ``None`` without alerts."""
+    if alerts == 0:
+        return None
+    return round(correct / alerts, 3)
+
+
+def _horizon_row(horizon: str, alerts: int, correct: int) -> dict[str, Any]:
+    """One horizon of the performance answer; a horizon without alerts has a null rate."""
+    return {
+        "horizon": horizon,
+        "alerts": alerts,
+        "correct": correct,
+        "hit_rate": _hit_rate(alerts, correct),
+    }
+
+
+def _type_row(alert_type: str, alerts: int, correct: int) -> dict[str, Any]:
+    """One per-type row, reported for the 7d horizon the correctness columns end at."""
+    return {
+        "alert_type": alert_type,
+        "horizon": _PERFORMANCE_HORIZONS[-1],
+        "alerts": int(alerts),
+        "correct": int(correct),
+        "hit_rate": _hit_rate(int(alerts), int(correct)),
+    }
