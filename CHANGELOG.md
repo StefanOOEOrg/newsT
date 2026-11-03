@@ -47,10 +47,14 @@ organisation guidelines.
   `dashboard/`, `notifier/` and `shared/` trees.
 - The Streamlit dashboard is **not** ported.
 - The entry points are the four CLI commands instead of the per-service scripts.
-- `init-db` creates or repairs the schema and is the only way to provision a database.
-- A database created before this release needs one `newstrading init-db` run: the quota
-  rows are renamed to the source names, and the `asset_events` unique key only reaches
-  fresh databases.
+- `init-db` creates the missing tables and repairs an existing database without losing data:
+  `sql/schema.sql` contains no `DROP`, `DELETE` or `TRUNCATE` statement, its three seed
+  inserts are guarded (`ON CONFLICT` or `NOT EXISTS`) and the legacy quota rows are renamed
+  in place. `newstrading init-db --reset` is the only destructive path — it drops all ten
+  tables first (`sql/reset.sql`) and that destroys every row.
+- A database created before this release needs one `newstrading init-db` run (safe: it
+  creates and repairs in place): the quota rows are renamed to the source names, and the
+  `asset_events` unique key only reaches fresh databases.
 
 ### Fixed
 
