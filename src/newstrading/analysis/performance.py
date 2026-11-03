@@ -164,10 +164,22 @@ UPDATE_SQL = """
         actual_direction_1d = %s,
         actual_direction_3d = %s,
         actual_direction_7d = %s,
+        correct_1d = CASE
+            WHEN predicted_direction = 'neutral' THEN NULL
+            ELSE %s = predicted_direction
+        END,
+        correct_3d = CASE
+            WHEN predicted_direction = 'neutral' THEN NULL
+            ELSE %s = predicted_direction
+        END,
+        correct_7d = CASE
+            WHEN predicted_direction = 'neutral' THEN NULL
+            ELSE %s = predicted_direction
+        END,
         last_updated = NOW()
     WHERE id = %s
 """
-"""The legacy update; the record id binds last."""
+"""The legacy update, plus the verdict of every horizon that closes; the id binds last."""
 
 
 def _direction(value: float | None) -> str | None:
@@ -373,9 +385,13 @@ class PerformanceTracker:
             return None
         prices = self._prices.series(ticker, alert_date.date(), HORIZONS)
         returns, directions = _measure(float(base), prices)
+        # the direction travels twice: once into actual_direction_*, once into the CASE
+        # that compares it with predicted_direction and writes the verdict
+        verdict_inputs = tuple(directions.get(horizon) for horizon in DIRECTION_HORIZONS)
         return (
             *(prices.get(horizon) for horizon in HORIZONS),
             *(returns.get(horizon) for horizon in HORIZONS),
-            *(directions.get(horizon) for horizon in DIRECTION_HORIZONS),
+            *verdict_inputs,
+            *verdict_inputs,
             record_id,
         )
