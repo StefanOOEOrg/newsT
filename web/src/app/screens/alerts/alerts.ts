@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
 
+import { PAGE_SIZES } from '../paging';
 import { AlertsStore, SEVERITIES } from './alerts.store';
 
 /**
@@ -17,4 +18,6 @@ export class Alerts {
   protected readonly store = inject(AlertsStore);
   /** The values of `alerts.severity`, as the column comment documents them. */
   protected readonly severities = SEVERITIES;
+  /** The page sizes of the pager's selector (#59). */
+  protected readonly pageSizes = PAGE_SIZES;
 }

@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
 
+import { PAGE_SIZES } from '../paging';
 import { LOG_LEVELS, LogsStore } from './logs.store';
 
 /**
@@ -17,4 +18,6 @@ export class Logs {
   protected readonly store = inject(LogsStore);
   /** The levels Python logging writes into `system_logs.level`. */
   protected readonly levels = LOG_LEVELS;
+  /** The page sizes of the pager's selector (#59). */
+  protected readonly pageSizes = PAGE_SIZES;
 }

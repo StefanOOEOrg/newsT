@@ -4,6 +4,7 @@ import { dash, fixed, signedPercent, stamp, yesNo } from '../../api/format';
 import { Failure, toFailure } from '../../api/http-failure';
 import { AlertRow, AlertView } from '../../api/models';
 import { AlertsQuery, AlertsService } from '../../api/alerts.service';
+import { clampPage, pageNoticeFor } from '../paging';
 
 /** Rows the alerts table asks for per page. */
 export const ALERTS_PER_PAGE = 25;
@@ -28,6 +29,9 @@ export class AlertsStore {
   readonly severity = signal<string | null>(null);
   readonly loading = signal(false);
   readonly error = signal<Failure | null>(null);
+
+  /** The sentence of the last clamped jump, `null` for a normal move; the pager prints it. */
+  readonly pageNotice = signal<string | null>(null);
 
   private readonly request = signal(0);
 
@@ -95,7 +99,16 @@ export class AlertsStore {
   }
 
   setPage(page: number): void {
-    this.page.set(Math.min(Math.max(1, Math.trunc(page)), this.pages()));
+    const target = clampPage(page, this.pages());
+    this.pageNotice.set(pageNoticeFor(target));
+    this.page.set(target.page);
+  }
+
+  /** Pick one of `PAGE_SIZES`; the list starts again at page 1, so the window stays valid. */
+  setPerPage(size: number): void {
+    this.perPage.set(size);
+    this.pageNotice.set(null);
+    this.page.set(1);
   }
 
   next(): void {
@@ -110,6 +123,7 @@ export class AlertsStore {
   setSeverity(severity: string): void {
     const trimmed = severity.trim();
     this.severity.set(trimmed === '' ? null : trimmed);
+    this.pageNotice.set(null);
     this.page.set(1);
   }
 }

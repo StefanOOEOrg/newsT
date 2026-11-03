@@ -4,6 +4,7 @@ import { dash, fixed, stamp } from '../../api/format';
 import { Failure, toFailure } from '../../api/http-failure';
 import { PostRow, PostView } from '../../api/models';
 import { PostsQuery, PostsService } from '../../api/posts.service';
+import { clampPage, pageNoticeFor } from '../paging';
 
 /** Rows the posts table asks for per page. */
 export const POSTS_PER_PAGE = 25;
@@ -27,6 +28,9 @@ export class PostsStore {
   readonly source = signal<string | null>(null);
   readonly loading = signal(false);
   readonly error = signal<Failure | null>(null);
+
+  /** The sentence of the last clamped jump, `null` for a normal move; the pager prints it. */
+  readonly pageNotice = signal<string | null>(null);
 
   /** Bumped by `reload()` and read by the effect only. */
   private readonly request = signal(0);
@@ -101,9 +105,18 @@ export class PostsStore {
     this.request.update((count) => count + 1);
   }
 
-  /** Jump to `page`, clamped to the pages the answer reported. */
+  /** Jump to `page`, clamped to the pages the answer reported; a jump past the end says so. */
   setPage(page: number): void {
-    this.page.set(Math.min(Math.max(1, Math.trunc(page)), this.pages()));
+    const target = clampPage(page, this.pages());
+    this.pageNotice.set(pageNoticeFor(target));
+    this.page.set(target.page);
+  }
+
+  /** Pick one of `PAGE_SIZES`; the list starts again at page 1, so the window stays valid. */
+  setPerPage(size: number): void {
+    this.perPage.set(size);
+    this.pageNotice.set(null);
+    this.page.set(1);
   }
 
   next(): void {
@@ -117,6 +130,7 @@ export class PostsStore {
   /** Filter by `social_posts.asset_id`; a blank field means every asset. */
   setAsset(term: string): void {
     this.assetId.set(assetIdOf(term));
+    this.pageNotice.set(null);
     this.page.set(1);
   }
 
@@ -124,6 +138,7 @@ export class PostsStore {
   setSource(term: string): void {
     const trimmed = term.trim();
     this.source.set(trimmed === '' ? null : trimmed);
+    this.pageNotice.set(null);
     this.page.set(1);
   }
 }

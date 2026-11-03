@@ -71,11 +71,23 @@
     </div>
 
     <div class="pager">
+      <label>
+        Per page
+        <select #perPage (change)="store.setPerPage(+perPage.value)">
+          @for (size of pageSizes; track size) {
+            <option [value]="size" [selected]="size === store.perPage()">{{ size }}</option>
+          }
+        </select>
+      </label>
       <button type="button" (click)="store.previous()" [disabled]="!store.hasPrevious()">
         Previous
       </button>
       <span>page {{ store.page() }} / {{ store.pages() }}</span>
       <button type="button" (click)="store.next()" [disabled]="!store.hasNext()">Next</button>
     </div>
+
+    @if (store.pageNotice(); as note) {
+      <p class="hint" data-testid="page-notice">{{ note }}</p>
+    }
   }
 </section>
