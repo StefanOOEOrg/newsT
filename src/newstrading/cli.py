@@ -42,13 +42,17 @@ EXIT_OK = 0
 EXIT_FAILURE = 1
 EXIT_CONFIG = 2
 
-COMMANDS = ("init-db", "collect", "analyze", "notify")
+DEFAULT_DASHBOARD_PORT = 8088
+"""Default port of ``newstrading dashboard``; the server's default is the same."""
+
+COMMANDS = ("init-db", "collect", "analyze", "notify", "dashboard")
 
 REQUIRED_VARIABLES: dict[str, tuple[str, ...]] = {
     "init-db": ("DATABASE_URL",),
     "collect": ("DATABASE_URL",),
     "analyze": ("DATABASE_URL", "ANTHROPIC_API_KEY"),
     "notify": ("DATABASE_URL",),
+    "dashboard": ("DATABASE_URL",),
 }
 
 _SCHEMA_FILE = "schema.sql"
@@ -58,7 +62,7 @@ _PREFILL = "sentiment:"
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """The CLI: sub-commands ``init-db``, ``collect``, ``analyze``, ``notify``; ``--version``."""
+    """The CLI: sub-commands ``init-db``, ``collect``, ``analyze``, ``notify``, ``dashboard``."""
     parser = argparse.ArgumentParser(
         prog="newstrading",
         description="Collect, analyze and notify on news-driven trading signals.",
@@ -84,6 +88,19 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser("collect", help="run one collection pass over every source")
     commands.add_parser("analyze", help="run one analysis pass over the waiting posts")
     commands.add_parser("notify", help="run one notification pass")
+    dashboard = commands.add_parser(
+        "dashboard",
+        help="serve the read-only dashboard API and the built web app",
+        description="Serve the read-only JSON API under /api and the built Angular app "
+        "under / on 127.0.0.1. The app is served when web/dist exists; build it first "
+        "with 'ng build' in web/.",
+    )
+    dashboard.add_argument(
+        "--port",
+        type=int,
+        default=DEFAULT_DASHBOARD_PORT,
+        help=f"TCP port of the server (default: {DEFAULT_DASHBOARD_PORT})",
+    )
     return parser
 
 
@@ -103,7 +120,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         settings = settings_for(arguments.command)
         configure_logging(settings)
         reset = getattr(arguments, "reset", False)
-        return run_command(arguments.command, settings, reset=reset)
+        port = getattr(arguments, "port", DEFAULT_DASHBOARD_PORT)
+        return run_command(arguments.command, settings, reset=reset, port=port)
     except (ConfigError, CollectorConfigError, CollectorError) as error:
         print(f"error: {error}", file=sys.stderr)
         return EXIT_CONFIG
@@ -143,13 +161,16 @@ def settings_for(command: str, environ: Mapping[str, str] | None = None) -> Sett
     return replace(settings, anthropic_api_key=source.get("ANTHROPIC_API_KEY", ""))
 
 
-def run_command(command: str, settings: Settings, *, reset: bool = False) -> int:
+def run_command(
+    command: str, settings: Settings, *, reset: bool = False, port: int = DEFAULT_DASHBOARD_PORT
+) -> int:
     """Run ``command`` and return its exit code.
 
     Args:
         command: One of :data:`COMMANDS`.
         settings: Resolved settings of the process.
         reset: ``init-db`` only: drop every table before applying the schema.
+        port: ``dashboard`` only: TCP port of the server.
 
     Returns:
         ``0`` when the command finished.
@@ -169,6 +190,11 @@ def run_command(command: str, settings: Settings, *, reset: bool = False) -> int
         logger.info("%d price bar(s) stored", _stored_prices(settings))
     elif command == "analyze":
         logger.info("%d post(s) analyzed", analyze_pending(settings))
+    elif command == "dashboard":
+        # deferred like the analyzer: only this command loads the web server
+        from newstrading.dashboard.api import serve
+
+        serve(settings, port=port)
     else:
         logger.info("%d alert(s) handled", NotificationService(settings).run())
     return EXIT_OK
