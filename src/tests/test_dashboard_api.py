@@ -2,6 +2,7 @@
 
 from datetime import datetime
 
+import anyio
 import pytest
 from fastapi.testclient import TestClient
 
@@ -609,3 +610,148 @@ def test_the_command_default_port_matches_the_server_default():
     from newstrading import cli
 
     assert cli.DEFAULT_DASHBOARD_PORT == api.DEFAULT_PORT
+
+
+INDEX_BODY = "<h1>newstrading dashboard</h1>"
+DEEP_LINKS = ("/posts", "/alerts", "/sources", "/logs", "/performance")
+
+
+def served_build(monkeypatch, tmp_path, *results):
+    """Run ``serve`` against a temporary build; return a client of the app and the build."""
+    captured = {}
+    monkeypatch.setattr(api.uvicorn, "run", lambda app, host, port: captured.update(app=app))
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text(INDEX_BODY, encoding="utf-8")
+    monkeypatch.setattr(api, "WEB_DIST", dist)
+
+    def connect(url, connector=None):
+        return FakeConnection(*results)
+
+    monkeypatch.setattr(api, "connect", connect)
+    serve(SETTINGS)
+    return TestClient(captured["app"]), dist
+
+
+def raw_get(app, path):
+    """Send one GET with ``path`` verbatim; an HTTP client would normalize ``..`` away."""
+    messages = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        messages.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"host", b"testserver")],
+        "server": ("testserver", 80),
+        "client": ("testclient", 50000),
+    }
+    anyio.run(app, scope, receive, send)
+    start = next(message for message in messages if message["type"] == "http.response.start")
+    body = b"".join(
+        message.get("body", b"") for message in messages if message["type"] == "http.response.body"
+    )
+    return start["status"], body
+
+
+@pytest.mark.parametrize("path", DEEP_LINKS)
+def test_a_deep_link_answers_the_index_page(monkeypatch, tmp_path, path):
+    """Refreshing an Angular route renders the app instead of a 404."""
+    client, _ = served_build(monkeypatch, tmp_path)
+
+    response = client.get(path)
+
+    assert response.status_code == 200
+    assert "newstrading dashboard" in response.text
+
+
+@pytest.mark.parametrize(
+    ("path", "key", "results"),
+    [
+        ("/api/overview", "assets", (((0, 0, 0, 0, 0, None, None),),)),
+        ("/api/performance", "horizons", (((0, 0, 0, 0),), ())),
+    ],
+)
+def test_the_api_paths_still_answer_json(monkeypatch, tmp_path, path, key, results):
+    """The SPA fallback never replaces an API answer with the index page."""
+    client, _ = served_build(monkeypatch, tmp_path, *results)
+
+    response = client.get(path)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
+    assert key in response.json()
+    assert "newstrading dashboard" not in response.text
+
+
+def test_an_unknown_api_path_is_a_json_404(monkeypatch, tmp_path):
+    """A mistyped API path must not answer the index page with 200."""
+    client, _ = served_build(monkeypatch, tmp_path)
+
+    response = client.get("/api/does-not-exist")
+
+    assert response.status_code == 404
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json() == {"detail": "Not Found"}
+    assert "newstrading dashboard" not in response.text
+
+
+def test_a_real_asset_is_served_as_a_file(monkeypatch, tmp_path):
+    """A hashed Angular bundle is the file itself, not the index page."""
+    client, dist = served_build(monkeypatch, tmp_path)
+    (dist / "main-abc.js").write_text("console.log('bundle');", encoding="utf-8")
+
+    response = client.get("/main-abc.js")
+
+    assert response.status_code == 200
+    assert response.text == "console.log('bundle');"
+
+
+def test_without_a_build_a_deep_link_explains_the_missing_build(monkeypatch, tmp_path):
+    """Without ``web/dist`` every path says which command is missing."""
+    captured = {}
+    monkeypatch.setattr(api.uvicorn, "run", lambda app, host, port: captured.update(app=app))
+    monkeypatch.setattr(api, "WEB_DIST", tmp_path / "missing")
+    connection = FakeConnection(((0, 0, 0, 0, 0, None, None),))
+    monkeypatch.setattr(api, "connect", lambda url, connector=None: connection)
+
+    serve(SETTINGS)
+
+    client = TestClient(captured["app"])
+    response = client.get("/posts")
+    assert response.status_code == 404
+    assert "run ng build first" in response.text
+
+
+@pytest.mark.parametrize("path", ["/../pyproject.toml", "/posts/../../pyproject.toml"])
+def test_a_raw_traversal_path_never_leaves_the_build(monkeypatch, tmp_path, path):
+    """A ``..`` segment is a 404, never a file outside ``web/dist`` and never the index."""
+    client, dist = served_build(monkeypatch, tmp_path)
+    (dist.parent / "pyproject.toml").write_text("[project]\nname = 'secret'\n", encoding="utf-8")
+
+    status, body = raw_get(client.app, path)
+
+    assert status == 404
+    assert b"secret" not in body
+
+
+def test_an_encoded_traversal_path_never_leaves_the_build(monkeypatch, tmp_path):
+    """A percent-encoded ``..`` is decoded by the server and stays a 404 as well."""
+    client, dist = served_build(monkeypatch, tmp_path)
+    (dist.parent / "pyproject.toml").write_text("[project]\nname = 'secret'\n", encoding="utf-8")
+
+    response = client.get("/%2e%2e/pyproject.toml")
+
+    assert response.status_code == 404
+    assert "secret" not in response.text

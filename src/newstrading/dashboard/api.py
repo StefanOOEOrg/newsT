@@ -19,8 +19,10 @@ from typing import Any
 import psycopg2
 import uvicorn
 from fastapi import FastAPI, Query, Request
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException
+from starlette.types import Scope
 
 from newstrading.config import Settings
 from newstrading.db import Connector, connect
@@ -377,6 +379,27 @@ def build_app(settings: Settings, *, connector: Connector = psycopg2.connect) ->
     return app
 
 
+class _SpaStaticFiles(StaticFiles):
+    """The files of the build, with ``index.html`` as the answer for app routes."""
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        """Serve a file of the build and the index page for every other route.
+
+        The Angular router owns the paths that are not files, so a refresh on a deep
+        link renders the app instead of a 404. Two paths stay a 404: anything under
+        ``/api``, whose unknown paths must stay JSON, and a ``..`` segment, which would
+        otherwise read a file outside the build.
+        """
+        if _is_api_path(scope["path"]) or _climbs_out(scope["path"]):
+            raise HTTPException(status_code=404)
+        try:
+            return await super().get_response(path, scope)
+        except HTTPException as error:
+            if error.status_code != 404:
+                raise
+            return await super().get_response("index.html", scope)
+
+
 def serve(settings: Settings, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
     """Serve the built web/dist under / and the API under /api.
 
@@ -393,16 +416,28 @@ def serve(settings: Settings, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT
     """
     app = build_app(settings)
     if WEB_DIST.is_dir():
-        app.mount("/", StaticFiles(directory=WEB_DIST, html=True), name="web")
+        app.mount("/", _SpaStaticFiles(directory=WEB_DIST, html=True), name="web")
     else:
 
-        @app.get("/")
-        def not_built() -> PlainTextResponse:
+        @app.get("/{full_path:path}", include_in_schema=False)
+        def not_built(full_path: str) -> PlainTextResponse:
             """Explain the missing build instead of returning a bare 404 page."""
+            if _is_api_path(f"/{full_path}"):
+                raise HTTPException(status_code=404)
             return PlainTextResponse(_NOT_BUILT, status_code=404)
 
     logger.info("dashboard on http://%s:%s (web/dist: %s)", host, port, WEB_DIST)
     uvicorn.run(app, host=host, port=port)
+
+
+def _is_api_path(path: str) -> bool:
+    """True for ``/api`` and everything under it; those answers are never the index."""
+    return path == "/api" or path.startswith("/api/")
+
+
+def _climbs_out(path: str) -> bool:
+    """True when a ``..`` segment could read a file outside the build directory."""
+    return ".." in path.split("/")
 
 
 def _fetch(
