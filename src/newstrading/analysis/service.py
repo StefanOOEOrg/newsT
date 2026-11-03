@@ -6,9 +6,11 @@ builds their prompt, calls the model, parses the answer and writes one row per p
 ``ai_analysis`` — the service the CLI's ``analyze`` command runs.
 
 The database connection, the model call and the sleep are injected, so the analyzer is
-testable without a database, a socket or a real wait. The retry policy and the neutral
-fallback are the legacy ones: a post is not retried forever, but an answer that arrives
-empty (content moderation) is still stored, with a neutral analysis.
+testable without a database, a socket or a real wait. The retry policy is the legacy
+one: a post is not retried forever. An empty answer is retried when the completion
+raises :class:`~newstrading.analysis.llm.RetryableModelError` — which the adapters do —
+and stored as the neutral analysis only when a completion hands back an empty string
+instead (the content-moderation case the legacy callable encoded).
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from typing import Any
 import psycopg2
 from anthropic import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
+from newstrading.analysis.llm import RetryableModelError
 from newstrading.analysis.parser import Analysis, AnalysisParseError, parse_analysis
 from newstrading.analysis.prompt import PromptBuilder, database_prompt_loader
 from newstrading.collectors.models import Asset, Post
@@ -39,8 +42,20 @@ Sleep = Callable[[float], None]
 RETRY_DELAYS = (2, 4, 8)
 """Seconds to wait through ``sleep`` for the three attempts of one model call."""
 
-RETRYABLE_ERRORS = (RateLimitError, InternalServerError, APITimeoutError, APIConnectionError)
-"""Failures of the model call that are worth another attempt — the legacy four."""
+RETRYABLE_ERRORS = (
+    RetryableModelError,
+    RateLimitError,
+    InternalServerError,
+    APITimeoutError,
+    APIConnectionError,
+)
+"""Failures of the model call that are worth another attempt.
+
+:class:`RetryableModelError` is what the adapters of
+:mod:`newstrading.analysis.llm` raise — an empty answer (a spent token budget) is one of
+them. The legacy four stay in the tuple so a completion handed straight to the SDK keeps
+its old retry behaviour.
+"""
 
 NEUTRAL_ANALYSIS = Analysis(
     sentiment="neutral",
