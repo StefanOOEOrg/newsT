@@ -51,7 +51,8 @@ REQUIRED_VARIABLES: dict[str, tuple[str, ...]] = {
     "notify": ("DATABASE_URL",),
 }
 
-_SCHEMA_PATH = ("sql", "schema.sql")
+_SCHEMA_FILE = "schema.sql"
+_RESET_FILE = "reset.sql"
 _UNUSED_ANALYSIS_KEY = "not-configured"
 _PREFILL = "sentiment:"
 
@@ -69,7 +70,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="print the traceback of a runtime failure",
     )
     commands = parser.add_subparsers(dest="command", required=True, metavar="command")
-    commands.add_parser("init-db", help="create the schema in the configured database")
+    bootstrap = commands.add_parser(
+        "init-db",
+        help="create the missing tables; the data of a populated database is kept",
+        description="Apply sql/schema.sql: create the tables and indexes that are missing and "
+        "keep every row of a populated database. Only --reset drops the tables first.",
+    )
+    bootstrap.add_argument(
+        "--reset",
+        action="store_true",
+        help="drop every table of the schema before creating it again (destroys all data)",
+    )
     commands.add_parser("collect", help="run one collection pass over every source")
     commands.add_parser("analyze", help="run one analysis pass over the waiting posts")
     commands.add_parser("notify", help="run one notification pass")
@@ -91,7 +102,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         settings = settings_for(arguments.command)
         configure_logging(settings)
-        return run_command(arguments.command, settings)
+        reset = getattr(arguments, "reset", False)
+        return run_command(arguments.command, settings, reset=reset)
     except (ConfigError, CollectorConfigError, CollectorError) as error:
         print(f"error: {error}", file=sys.stderr)
         return EXIT_CONFIG
@@ -131,12 +143,13 @@ def settings_for(command: str, environ: Mapping[str, str] | None = None) -> Sett
     return replace(settings, anthropic_api_key=source.get("ANTHROPIC_API_KEY", ""))
 
 
-def run_command(command: str, settings: Settings) -> int:
+def run_command(command: str, settings: Settings, *, reset: bool = False) -> int:
     """Run ``command`` and return its exit code.
 
     Args:
         command: One of :data:`COMMANDS`.
         settings: Resolved settings of the process.
+        reset: ``init-db`` only: drop every table before applying the schema.
 
     Returns:
         ``0`` when the command finished.
@@ -145,8 +158,12 @@ def run_command(command: str, settings: Settings) -> int:
         Exception: Whatever the command raises; :func:`main` maps it to an exit code.
     """
     if command == "init-db":
-        init_db(settings)
-        logger.info("database schema applied")
+        init_db(settings, reset=reset)
+        logger.info(
+            "database recreated from an empty schema"
+            if reset
+            else "database schema applied; existing data kept"
+        )
     elif command == "collect":
         logger.info("%d post(s) stored", collect_once(settings))
         logger.info("%d price bar(s) stored", _stored_prices(settings))
@@ -157,23 +174,31 @@ def run_command(command: str, settings: Settings) -> int:
     return EXIT_OK
 
 
-def init_db(settings: Settings) -> None:
+def init_db(settings: Settings, *, reset: bool = False) -> None:
     """Apply the consolidated schema to the configured database.
+
+    The default path is non-destructive: it creates the tables and indexes that are
+    missing and keeps every row of a populated database. ``reset`` applies
+    ``sql/reset.sql`` first, which drops the tables and therefore all data.
 
     Args:
         settings: Settings holding ``database_url``.
+        reset: Drop every table before the schema runs; ``False`` (the default) keeps
+            the data.
 
     Raises:
-        ConfigError: If ``sql/schema.sql`` is not next to the working directory or the
-            package.
+        ConfigError: If ``sql/schema.sql`` — or ``sql/reset.sql`` with ``reset`` — is
+            not next to the working directory or the package.
         DatabaseError: If the database cannot be opened.
     """
-    schema = _schema_file().read_text(encoding="utf-8")
+    files = [_sql_file(_RESET_FILE)] if reset else []
+    files.append(_sql_file(_SCHEMA_FILE))
     # ``db.Connection`` names only commit/rollback/close, so the cursor is not visible here.
     connection: Any = connect(settings.database_url)
     try:
         with connection.cursor() as cursor:
-            cursor.execute(schema)
+            for path in files:
+                cursor.execute(path.read_text(encoding="utf-8"))
         connection.commit()
     except BaseException:
         connection.rollback()
@@ -182,13 +207,13 @@ def init_db(settings: Settings) -> None:
         connection.close()
 
 
-def _schema_file() -> Path:
-    """Return the schema file of the repository or of the image, wherever it is."""
+def _sql_file(name: str) -> Path:
+    """Return the SQL file of the repository or of the image, wherever it is."""
     for directory in (Path.cwd(), Path(__file__).resolve().parents[2]):
-        candidate = directory.joinpath(*_SCHEMA_PATH)
+        candidate = directory.joinpath("sql", name)
         if candidate.is_file():
             return candidate
-    raise ConfigError("sql/schema.sql not found; run the command from the repository root")
+    raise ConfigError(f"sql/{name} not found; run the command from the repository root")
 
 
 _UNKEYED_SOURCES: tuple[str, ...] = ("rss", "congressional_trades")
