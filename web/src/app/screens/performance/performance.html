@@ -1,6 +1,9 @@
 <section class="screen">
   <h1>Performance</h1>
-  <p class="hint">Was it right? The hit rate of the alerts that already have a 7-day verdict.</p>
+  <p class="hint">
+    Was it right? The hit rate <code>/api/performance</code> aggregates per horizon, and per alert
+    type for the 7-day verdict.
+  </p>
 
   <div class="toolbar">
     <button type="button" (click)="store.reload()" [disabled]="store.loading()">Refresh</button>
@@ -8,46 +11,24 @@
 
   @if (store.error(); as failure) {
     <p class="error" data-testid="error">
-      Could not load the alerts behind the performance (HTTP {{ failure.status }}).
-      {{ failure.message }}
+      Could not load the performance (HTTP {{ failure.status }}). {{ failure.message }}
     </p>
   } @else if (store.empty()) {
     <p class="empty" data-testid="empty">
       No alerts to judge yet — the hit rate appears once <code>newstrading performance</code> has
       filled <code>alert_performance</code>.
     </p>
+  } @else if (store.answer() === null) {
+    <p class="hint" data-testid="loading">Loading the performance…</p>
   } @else {
-    <div class="cards">
-      <div class="card">
-        <div class="card-label">Evaluated alerts</div>
-        <div class="card-value">{{ store.evaluated() }}</div>
-      </div>
-      <div class="card">
-        <div class="card-label">Hits 7d</div>
-        <div class="card-value">{{ store.hits() }}</div>
-      </div>
-      <div class="card">
-        <div class="card-label">Misses 7d</div>
-        <div class="card-value">{{ store.misses() }}</div>
-      </div>
-      <div class="card">
-        <div class="card-label">Hit rate 7d</div>
-        <div class="card-value">{{ store.hitRateLabel() }}</div>
-      </div>
-      <div class="card">
-        <div class="card-label">Average 7d return</div>
-        <div class="card-value">{{ store.averageReturnLabel() }}</div>
-      </div>
-    </div>
-
     <h2>Per horizon</h2>
     <div class="panel">
       <table class="data" data-testid="horizons">
         <thead>
           <tr>
             <th>Horizon</th>
-            <th class="num">Evaluated</th>
-            <th class="num">Hits</th>
+            <th class="num">Alerts</th>
+            <th class="num">Correct</th>
             <th class="num">Misses</th>
             <th class="num">Hit rate</th>
           </tr>
@@ -56,8 +37,8 @@
           @for (row of store.horizons(); track row.horizon) {
             <tr>
               <td>{{ row.horizon }}</td>
-              <td class="num">{{ row.evaluated }}</td>
-              <td class="num">{{ row.hits }}</td>
+              <td class="num">{{ row.alerts }}</td>
+              <td class="num">{{ row.correct }}</td>
               <td class="num">{{ row.misses }}</td>
               <td class="num">{{ row.rate }}</td>
             </tr>
@@ -66,32 +47,39 @@
       </table>
     </div>
 
-    <h2>Per alert type</h2>
-    <div class="panel">
-      <table class="data" data-testid="types">
-        <thead>
-          <tr>
-            <th>Alert type</th>
-            <th class="num">Evaluated</th>
-            <th class="num">Hits</th>
-            <th class="num">Misses</th>
-            <th class="num">Hit rate</th>
-            <th class="num">Average 7d return</th>
-          </tr>
-        </thead>
-        <tbody>
-          @for (row of store.rows(); track row.alertType) {
+    <h2>Per alert type (7d)</h2>
+    @if (store.rows().length === 0) {
+      <p class="empty" data-testid="types-empty">
+        No alert type has a 7-day verdict yet — the table fills once
+        <code>newstrading performance</code> has judged the alerts.
+      </p>
+    } @else {
+      <div class="panel">
+        <table class="data" data-testid="types">
+          <thead>
             <tr>
-              <td>{{ row.alertType }}</td>
-              <td class="num">{{ row.evaluated }}</td>
-              <td class="num">{{ row.hits }}</td>
-              <td class="num">{{ row.misses }}</td>
-              <td class="num">{{ row.rate }}</td>
-              <td class="num">{{ row.averageReturn }}</td>
+              <th>Alert type</th>
+              <th>Horizon</th>
+              <th class="num">Alerts</th>
+              <th class="num">Correct</th>
+              <th class="num">Misses</th>
+              <th class="num">Hit rate</th>
             </tr>
-          }
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            @for (row of store.rows(); track row.alertType + row.horizon) {
+              <tr>
+                <td>{{ row.alertType }}</td>
+                <td>{{ row.horizon }}</td>
+                <td class="num">{{ row.alerts }}</td>
+                <td class="num">{{ row.correct }}</td>
+                <td class="num">{{ row.misses }}</td>
+                <td class="num">{{ row.rate }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    }
   }
 </section>
