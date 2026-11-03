@@ -4,6 +4,10 @@
 -- This is the complete database schema including all migrations merged into
 -- a single file. This represents the full state of the database as of 2025-11-21.
 --
+-- Applying this file is non-destructive: every statement creates only what is
+-- missing and keeps the rows of a populated database. To start from an empty
+-- database, apply sql/reset.sql first (``newstrading init-db --reset``).
+--
 -- Sections:
 --   1. Core Tables (Asset, Social Posts, AI Analysis)
 --   2. Metrics & Performance Tables
@@ -24,8 +28,7 @@
 
 -- Asset table: Stores assets to track for trading signals (stocks, crypto, currencies, etc.)
 -- Includes initialization tracking for historical data collection
-DROP TABLE IF EXISTS asset CASCADE;
-CREATE TABLE asset (
+CREATE TABLE IF NOT EXISTS asset (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     ticker VARCHAR(10) NOT NULL,
@@ -44,8 +47,7 @@ COMMENT ON COLUMN asset.initialization_days IS 'Number of days of historical dat
 
 -- Social posts table: Stores raw social media posts from Reddit, Twitter, etc.
 -- Includes keyword tracking for performance analysis
-DROP TABLE IF EXISTS social_posts CASCADE;
-CREATE TABLE social_posts (
+CREATE TABLE IF NOT EXISTS social_posts (
     id SERIAL PRIMARY KEY,
     asset_id INTEGER REFERENCES asset(id) ON DELETE CASCADE,
     source VARCHAR(50) NOT NULL,
@@ -66,8 +68,7 @@ COMMENT ON COLUMN social_posts.matched_keywords IS 'Array of keywords that match
 
 -- AI analysis table: Stores Claude AI analysis results for each post
 -- Includes special event detection for enhanced trading signals
-DROP TABLE IF EXISTS ai_analysis CASCADE;
-CREATE TABLE ai_analysis (
+CREATE TABLE IF NOT EXISTS ai_analysis (
     id SERIAL PRIMARY KEY,
     post_id INTEGER REFERENCES social_posts(id) ON DELETE CASCADE,
     sentiment VARCHAR(20),
@@ -88,8 +89,7 @@ COMMENT ON COLUMN ai_analysis.special_events IS 'Array of detected special event
 -- ==============================================================================
 
 -- Daily metrics table: Aggregated daily statistics per asset
-DROP TABLE IF EXISTS daily_metrics CASCADE;
-CREATE TABLE daily_metrics (
+CREATE TABLE IF NOT EXISTS daily_metrics (
     id SERIAL PRIMARY KEY,
     asset_id INTEGER REFERENCES asset(id) ON DELETE CASCADE,
     date DATE NOT NULL,
@@ -105,8 +105,7 @@ COMMENT ON TABLE daily_metrics IS 'Daily aggregated metrics for each asset inclu
 
 -- Keyword performance table: Tracks which keywords are finding posts
 -- Helps optimize search keywords for each asset (from migration 001_add_keyword_performance)
-DROP TABLE IF EXISTS keyword_performance CASCADE;
-CREATE TABLE keyword_performance (
+CREATE TABLE IF NOT EXISTS keyword_performance (
     id SERIAL PRIMARY KEY,
     asset_id INTEGER REFERENCES asset(id) ON DELETE CASCADE,
     keyword VARCHAR(255) NOT NULL,
@@ -125,8 +124,7 @@ COMMENT ON TABLE keyword_performance IS 'Tracks effectiveness of search keywords
 
 -- Alerts table: Stores generated alerts for unusual activity or trading signals
 -- Includes notification tracking
-DROP TABLE IF EXISTS alerts CASCADE;
-CREATE TABLE alerts (
+CREATE TABLE IF NOT EXISTS alerts (
     id SERIAL PRIMARY KEY,
     asset_id INTEGER REFERENCES asset(id) ON DELETE CASCADE,
     timestamp TIMESTAMP DEFAULT NOW(),
@@ -205,8 +203,7 @@ COMMENT ON COLUMN alert_performance.correct_1d IS 'True if predicted direction m
 
 -- Alert notification preferences table: Per-asset notification settings
 -- Controls when and how users receive alerts (from migration 001_add_notifications)
-DROP TABLE IF EXISTS alert_notification_preferences CASCADE;
-CREATE TABLE alert_notification_preferences (
+CREATE TABLE IF NOT EXISTS alert_notification_preferences (
     id SERIAL PRIMARY KEY,
     asset_id INTEGER REFERENCES asset(id) ON DELETE CASCADE,
     alert_type VARCHAR(50),
@@ -223,8 +220,7 @@ COMMENT ON TABLE alert_notification_preferences IS 'Per-asset notification prefe
 
 -- Notification log table: Tracks all sent notifications
 -- Provides audit trail (from migration 001_add_notifications)
-DROP TABLE IF EXISTS notification_log CASCADE;
-CREATE TABLE notification_log (
+CREATE TABLE IF NOT EXISTS notification_log (
     id SERIAL PRIMARY KEY,
     alert_id INTEGER REFERENCES alerts(id),
     channel VARCHAR(20) NOT NULL,
@@ -238,8 +234,7 @@ COMMENT ON TABLE notification_log IS 'Audit log of all notification attempts (su
 
 -- Global notification settings table: Stores SMTP, Twilio, and other global configs
 -- Single-row table with system-wide settings
-DROP TABLE IF EXISTS notification_settings CASCADE;
-CREATE TABLE notification_settings (
+CREATE TABLE IF NOT EXISTS notification_settings (
     id SERIAL PRIMARY KEY,
     notification_email VARCHAR(255),
     notification_phone VARCHAR(20),
@@ -285,8 +280,7 @@ COMMENT ON COLUMN notification_settings.market_close_minute IS 'Market closing m
 -- ==============================================================================
 
 -- System logs table: Stores application logs for debugging and monitoring
-DROP TABLE IF EXISTS system_logs CASCADE;
-CREATE TABLE system_logs (
+CREATE TABLE IF NOT EXISTS system_logs (
     id SERIAL PRIMARY KEY,
     timestamp TIMESTAMP DEFAULT NOW(),
     level VARCHAR(20) NOT NULL,
@@ -306,48 +300,53 @@ COMMENT ON TABLE system_logs IS 'Centralized application logs with structured me
 -- ==============================================================================
 
 -- Asset indexes
-CREATE INDEX idx_asset_init_status ON asset(initialization_status);
+CREATE INDEX IF NOT EXISTS idx_asset_init_status ON asset(initialization_status);
 
 -- Social posts indexes
-CREATE INDEX idx_social_posts_asset ON social_posts(asset_id);
-CREATE INDEX idx_social_posts_created ON social_posts(created_at);
-CREATE INDEX idx_social_posts_matched_keywords ON social_posts USING GIN(matched_keywords);
+CREATE INDEX IF NOT EXISTS idx_social_posts_asset ON social_posts(asset_id);
+CREATE INDEX IF NOT EXISTS idx_social_posts_created ON social_posts(created_at);
+CREATE INDEX IF NOT EXISTS idx_social_posts_matched_keywords ON social_posts USING GIN(matched_keywords);
 
 -- AI analysis indexes
-CREATE INDEX idx_ai_analysis_post ON ai_analysis(post_id);
+CREATE INDEX IF NOT EXISTS idx_ai_analysis_post ON ai_analysis(post_id);
 
 -- Daily metrics indexes
-CREATE INDEX idx_daily_metrics_asset_date ON daily_metrics(asset_id, date);
+CREATE INDEX IF NOT EXISTS idx_daily_metrics_asset_date ON daily_metrics(asset_id, date);
 
 -- Keyword performance indexes
-CREATE INDEX idx_keyword_performance_asset ON keyword_performance(asset_id);
-CREATE INDEX idx_keyword_performance_posts ON keyword_performance(posts_found DESC);
-CREATE INDEX idx_keyword_performance_last_found ON keyword_performance(last_found_at);
+CREATE INDEX IF NOT EXISTS idx_keyword_performance_asset ON keyword_performance(asset_id);
+CREATE INDEX IF NOT EXISTS idx_keyword_performance_posts ON keyword_performance(posts_found DESC);
+CREATE INDEX IF NOT EXISTS idx_keyword_performance_last_found ON keyword_performance(last_found_at);
 
 -- Alerts indexes
-CREATE INDEX idx_alerts_asset ON alerts(asset_id);
-CREATE INDEX idx_alerts_notified ON alerts(notified);
+CREATE INDEX IF NOT EXISTS idx_alerts_asset ON alerts(asset_id);
+CREATE INDEX IF NOT EXISTS idx_alerts_notified ON alerts(notified);
 
 -- Notification preferences indexes
-CREATE INDEX idx_alert_prefs_asset ON alert_notification_preferences(asset_id);
+CREATE INDEX IF NOT EXISTS idx_alert_prefs_asset ON alert_notification_preferences(asset_id);
 
 -- Notification log indexes
-CREATE INDEX idx_notification_log_alert ON notification_log(alert_id);
+CREATE INDEX IF NOT EXISTS idx_notification_log_alert ON notification_log(alert_id);
 
 -- System logs indexes
-CREATE INDEX idx_system_logs_timestamp ON system_logs(timestamp);
-CREATE INDEX idx_system_logs_level ON system_logs(level);
-CREATE INDEX idx_system_logs_service ON system_logs(service);
+CREATE INDEX IF NOT EXISTS idx_system_logs_timestamp ON system_logs(timestamp);
+CREATE INDEX IF NOT EXISTS idx_system_logs_level ON system_logs(level);
+CREATE INDEX IF NOT EXISTS idx_system_logs_service ON system_logs(service);
 
 -- ==============================================================================
 -- SECTION 7: SAMPLE DATA
 -- ==============================================================================
 
 -- Insert sample assets for testing
-INSERT INTO asset (name, ticker, search_keywords) VALUES
-('Genpact', 'G', ARRAY['genpact', 'hiring', 'job opening']),
-('Palantir', 'PLTR', ARRAY['palantir', 'pltr']),
-('Snowflake', 'SNOW', ARRAY['snowflake', 'snow']);
+-- ``asset`` has no unique key on ``ticker`` (an old database may violate one), so the seed
+-- guards every row instead: a second ``init-db`` neither fails nor duplicates them.
+INSERT INTO asset (name, ticker, search_keywords)
+SELECT * FROM (VALUES
+    ('Genpact', 'G', ARRAY['genpact', 'hiring', 'job opening']),
+    ('Palantir', 'PLTR', ARRAY['palantir', 'pltr']),
+    ('Snowflake', 'SNOW', ARRAY['snowflake', 'snow'])
+) AS seed(name, ticker, keywords)
+WHERE NOT EXISTS (SELECT 1 FROM asset a WHERE a.ticker = seed.ticker);
 
 -- Insert default notification settings with comprehensive AI analysis prompt
 -- Includes special event detection (from migrations 002 & 003)
@@ -380,7 +379,7 @@ Focus on identifying trading signals:
 - BULLISH (long signals): hiring, partnerships, product launches, earnings beats, growth indicators, positive guidance, analyst upgrades, insider buying, market share gains
 - BEARISH (short signals): problems, layoffs, negative sentiment, downgrades, missed earnings, legal issues, regulatory risks, guidance cuts, insider selling, customer losses
 
-Return ONLY valid JSON, no other text.');
+Return ONLY valid JSON, no other text.') ON CONFLICT (id) DO NOTHING;
 
 -- ==============================================================================
 -- SECTION 8: EVENTS

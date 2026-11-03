@@ -81,6 +81,31 @@ class FakeConnection:
         self.closes += 1
 
 
+class HoldingCursor(FakeCursor):
+    """A cursor that models the effect of the SQL: ``DROP`` clears, ``INSERT`` appends."""
+
+    def execute(self, statement, parameters=None):
+        super().execute(statement, parameters)
+        rows = self._connection.rows
+        for table in re.findall(r"DROP TABLE IF EXISTS (\w+)", statement):
+            rows.setdefault(table, []).clear()
+        for table, values in re.findall(
+            r"INSERT INTO (\w+)[^;]*?VALUES\s*(.+?);", statement, re.DOTALL
+        ):
+            rows.setdefault(table, []).append(" ".join(values.split()))
+
+
+class HoldingConnection(FakeConnection):
+    """A fake connection over a database that already holds rows."""
+
+    def __init__(self, rows):
+        super().__init__()
+        self.rows = {table: list(values) for table, values in rows.items()}
+
+    def cursor(self):
+        return HoldingCursor(self)
+
+
 @pytest.fixture(autouse=True)
 def environment(monkeypatch):
     """Clear every variable the CLI reads, and keep logging away from the database."""
@@ -183,15 +208,42 @@ def test_main_with_version_prints_the_version_and_exits_0(capsys):
 
 
 def test_main_init_db_dispatches_to_the_bootstrap(environment, capsys):
-    """``init-db`` hands the resolved settings to the bootstrap."""
+    """``init-db`` hands the resolved settings to the bootstrap, without the reset flag."""
     environment.setenv("DATABASE_URL", URL)
     seen = []
-    environment.setattr("newstrading.cli.init_db", seen.append)
+    environment.setattr(
+        "newstrading.cli.init_db",
+        lambda settings, *, reset=False: seen.append((settings, reset)),
+    )
 
     assert main(["init-db"]) == 0
 
-    assert [settings.database_url for settings in seen] == [URL]
+    assert [settings.database_url for settings, _reset in seen] == [URL]
+    assert [reset for _settings, reset in seen] == [False]
     assert capsys.readouterr().err == ""
+
+
+def test_main_init_db_with_reset_passes_the_flag_to_the_bootstrap(environment):
+    """``--reset`` is the only path that renames the bootstrap's default."""
+    environment.setenv("DATABASE_URL", URL)
+    seen = []
+    environment.setattr(
+        "newstrading.cli.init_db",
+        lambda settings, *, reset=False: seen.append(reset),
+    )
+
+    assert main(["init-db", "--reset"]) == 0
+
+    assert seen == [True]
+
+
+def test_the_init_db_help_documents_the_safe_default_and_the_reset_flag(capsys):
+    """``--help`` says that the default keeps the data and that ``--reset`` destroys it."""
+    assert main(["init-db", "--help"]) == 0
+
+    help_text = capsys.readouterr().out
+    assert "--reset" in help_text
+    assert "keep" in help_text.lower()
 
 
 def test_main_collect_dispatches_to_the_collection_pass(environment):
@@ -535,6 +587,72 @@ def test_init_db_rolls_back_when_the_schema_fails(environment):
         init_db(SETTINGS)
 
     assert (connection.commits, connection.rollbacks, connection.closes) == (0, 1, 1)
+
+
+def test_init_db_executes_only_the_schema_file(environment):
+    """Without ``--reset`` the reset script is neither read nor executed."""
+    connection = FakeConnection()
+    environment.setattr("newstrading.cli.connect", lambda url: connection)
+
+    init_db(SETTINGS)
+
+    statements = [statement for statement, _parameters in connection.statements]
+    assert statements == [(ROOT / "sql" / "schema.sql").read_text(encoding="utf-8")]
+
+
+def test_init_db_with_reset_applies_the_reset_script_first(environment):
+    """``--reset`` drops the tables, then the schema recreates them: that order, once each."""
+    connection = FakeConnection()
+    environment.setattr("newstrading.cli.connect", lambda url: connection)
+
+    init_db(SETTINGS, reset=True)
+
+    statements = [statement for statement, _parameters in connection.statements]
+    assert statements == [
+        (ROOT / "sql" / "reset.sql").read_text(encoding="utf-8"),
+        (ROOT / "sql" / "schema.sql").read_text(encoding="utf-8"),
+    ]
+    assert (connection.commits, connection.rollbacks, connection.closes) == (1, 0, 1)
+
+
+def test_a_second_init_db_keeps_the_rows_of_a_populated_database(environment):
+    """The default path only creates what is missing; the rows are still there afterwards."""
+    populated = {
+        "asset": ["('Genpact', 'G', ARRAY['genpact'])"],
+        "social_posts": ["('post-1', 1, 'rss', 'rss-1')"],
+        "alerts": ["(1, 1, 'Hiring', 'positive', 0.8)"],
+    }
+    connection = HoldingConnection(populated)
+    environment.setattr("newstrading.cli.connect", lambda url: connection)
+
+    init_db(SETTINGS)
+
+    for table, rows in populated.items():
+        assert connection.rows[table][: len(rows)] == rows
+    assert connection.rows["social_posts"] == populated["social_posts"]
+    assert connection.rows["alerts"] == populated["alerts"]
+    assert len(connection.rows["asset"]) > len(populated["asset"])
+
+
+def test_reset_empties_the_database_before_the_schema_runs(environment):
+    """``--reset`` is the only path that destroys data; the pre-existing rows are gone."""
+    connection = HoldingConnection(
+        {"asset": ["('Genpact', 'G', ARRAY['genpact'])"], "alerts": ["(1,)"]}
+    )
+    environment.setattr("newstrading.cli.connect", lambda url: connection)
+
+    init_db(SETTINGS, reset=True)
+
+    assert "('Genpact', 'G', ARRAY['genpact'])" not in connection.rows["asset"]
+    assert connection.rows["alerts"] == []
+
+
+def test_readme_documents_the_non_destructive_bootstrap_and_the_reset_flag():
+    """The README calls ``init-db`` non-destructive and names ``--reset`` as the only reset."""
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "--reset" in text
+    assert "non-destructive" in text.lower()
 
 
 def test_collect_reports_the_stored_price_bars(environment, caplog):
