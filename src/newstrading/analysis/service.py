@@ -7,10 +7,10 @@ builds their prompt, calls the model, parses the answer and writes one row per p
 
 The database connection, the model call and the sleep are injected, so the analyzer is
 testable without a database, a socket or a real wait. The retry policy is the legacy
-one: a post is not retried forever. An empty answer is retried when the completion
-raises :class:`~newstrading.analysis.llm.RetryableModelError` — which the adapters do —
-and stored as the neutral analysis only when a completion hands back an empty string
-instead (the content-moderation case the legacy callable encoded).
+one: a post is not retried forever. A completion that answers ``""``, only whitespace or
+``None`` is a retryable failure like the ones the adapters raise, so it is attempted
+three times and - when the last attempt fails too - the post stays unanalysed. The
+service never stores a verdict the model did not produce.
 """
 
 from __future__ import annotations
@@ -32,8 +32,8 @@ from newstrading.errors import NewsTradingError
 
 logger = logging.getLogger(__name__)
 
-Complete = Callable[[str], str]
-"""Call the model with the prompt and return the raw answer text."""
+Complete = Callable[[str], str | None]
+"""Call the model with the prompt and return the raw answer text; ``None`` is empty."""
 
 Sleep = Callable[[float], None]
 """Wait between two attempts; injected so tests do not sleep."""
@@ -49,16 +49,6 @@ RETRYABLE_ERRORS = (RetryableModelError,)
 them. A terminal :class:`~newstrading.analysis.llm.ModelError` is not in the tuple and
 skips the post at once.
 """
-
-NEUTRAL_ANALYSIS = Analysis(
-    sentiment="neutral",
-    sentiment_score=0.0,
-    category="Other",
-    key_topics=("Content moderation filtered",),
-    summary="Content could not be analyzed due to API content filters.",
-    special_events=(),
-)
-"""What an empty model answer becomes, so the post is not retried forever."""
 
 UNANALYZED_SQL = """
     SELECT
@@ -226,17 +216,16 @@ class Analyzer:
             row: One row of :data:`UNANALYZED_SQL`.
 
         Returns:
-            The analysis to store, the neutral one for an empty answer, or ``None`` when
-            the post has to wait for the next run.
+            The analysis to store, or ``None`` when the post has to wait for the next
+            run: the model did not answer after three attempts (an empty answer counts
+            as a failed attempt) or its answer cannot be parsed. Nothing is stored for
+            those posts, so the post stays unanalysed.
         """
         post, asset = _post_and_asset(row)
         prompt = self._builder.build(post, asset)
         text = self._request(prompt, post.post_id)
         if text is None:
             return None
-        if not text.strip():
-            logger.warning("empty answer for post %s; storing the neutral analysis", post.post_id)
-            return NEUTRAL_ANALYSIS
         try:
             return parse_analysis(text)
         except AnalysisParseError as error:
@@ -246,16 +235,23 @@ class Analyzer:
     def _request(self, prompt: str, post_id: str) -> str | None:
         """Call the model, retrying only the failures the legacy service retried.
 
+        An answer that is ``None``, ``""`` or only whitespace is a failure of the
+        attempt: it is raised as a :class:`RetryableModelError` inside the attempt, so it
+        waits through the same ``2, 4`` seconds as a rate limit and is tried three times.
+
         Args:
             prompt: The prompt built for one post.
             post_id: Source id of the post, used in the log lines.
 
         Returns:
-            The raw answer text, or ``None`` after three failed attempts.
+            The raw, non-empty answer text, or ``None`` after three failed attempts.
         """
         for attempt, delay in enumerate(RETRY_DELAYS, start=1):
             try:
-                return self._complete(prompt)
+                text = self._complete(prompt)
+                if text is None or not text.strip():
+                    raise RetryableModelError("the model answered nothing")
+                return text
             except RETRYABLE_ERRORS as error:
                 if attempt < len(RETRY_DELAYS):
                     logger.warning(
