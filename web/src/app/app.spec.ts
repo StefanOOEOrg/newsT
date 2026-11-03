@@ -1,3 +1,5 @@
+import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
@@ -10,10 +12,15 @@ import { APP_VERSION } from './version';
  * Smoke tests of the shell (#57): the six lazy routes exist and render, the unknown route reaches
  * the 404 component, and the header/footer carry the logo, the wordmark, the six links and the
  * version.
+ *
+ * The mounted screens fire their HTTP calls on creation. The testing backend captures them, so no
+ * spec here depends on a request to a server that is not running (#59).
  */
 describe('App shell', () => {
   function configure(): void {
-    TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
+    TestBed.configureTestingModule({
+      providers: [provideRouter(routes), provideHttpClient(), provideHttpClientTesting()],
+    });
   }
 
   function shell(): HTMLElement {

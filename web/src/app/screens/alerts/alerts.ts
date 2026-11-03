@@ -1,21 +1,23 @@
-import { ChangeDetectionStrategy, Component } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
+
+import { PAGE_SIZES } from '../paging';
+import { AlertsStore, SEVERITIES } from './alerts.store';
 
 /**
- * Placeholder for `/alerts` - *What fired?*
+ * The alerts screen `/alerts` - *What fired?*
  *
- * The real screen (paged alerts with the 7-day return and the correctness flag, severity filter)
- * arrives with #58; this component only proves the route, the shell and the layout.
+ * One row per alert with its 7-day return and the correctness flag, the severity filter and the
+ * pager. The store owns the window, the filter and the request (#58).
  */
 @Component({
   selector: 'app-alerts',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  template: `
-    <section class="screen">
-      <h1>Alerts</h1>
-      <p class="hint">
-        What fired? Paged alerts with the 7-day return and the severity filter arrive with #58.
-      </p>
-    </section>
-  `,
+  templateUrl: './alerts.html',
 })
-export class Alerts {}
+export class Alerts {
+  protected readonly store = inject(AlertsStore);
+  /** The values of `alerts.severity`, as the column comment documents them. */
+  protected readonly severities = SEVERITIES;
+  /** The page sizes of the pager's selector (#59). */
+  protected readonly pageSizes = PAGE_SIZES;
+}

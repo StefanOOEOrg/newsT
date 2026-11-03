@@ -16,6 +16,7 @@ turns strong signals into alerts and notifications.
 - **Notifies** by email, SMS, push or webhook, one channel per configured notification.
 - **Stores** everything in one PostgreSQL schema: assets and keywords, posts, analyses, alerts,
   metrics, collector statistics and API usage.
+- **Shows** all of it in a read-only dashboard with six screens — see [Dashboard](#dashboard).
 
 ## Architecture
 
@@ -27,6 +28,7 @@ turns strong signals into alerts and notifications.
 | Collectors | `src/newstrading/collectors/` | one module per source, registry, dedupe, rate limiting |
 | Analysis | `src/newstrading/analysis/` | prompt, parser, analyzer service, alerts, metrics |
 | Notifications | `src/newstrading/notify/` | email, SMS, push and webhook senders |
+| [Dashboard](#dashboard) | `web/`, `src/newstrading/dashboard` | the Angular SPA and the read-only `/api` it reads |
 | Packaging | `pyproject.toml`, `Dockerfile`, `docker-compose.yml` | wheel, image, local PostgreSQL stack |
 
 ## Requirements
@@ -147,6 +149,26 @@ Node 22 or newer, then start the command:
 cd web && npm ci && npx ng build && cd ..
 uv run newstrading dashboard --port 8088
 ```
+
+Open <http://127.0.0.1:8088/>. The server binds `127.0.0.1` only and has no authentication: it is a
+local viewer for the database, not a service to expose.
+
+The six screens, in the order of the questions they answer:
+
+- **Overview** (`/`) — *Is it running?* assets, posts, analyses, alerts, the last collector run and
+  the database size.
+- **Posts** (`/posts`) — *What did it find?* every post with its analysis, filterable by asset and
+  source.
+- **Alerts** (`/alerts`) — *What fired?* the alerts with severity, confidence, the 7-day return and
+  whether they were right.
+- **Performance** (`/performance`) — *Was it right?* the hit rate of the alerts that already have a
+  7-day verdict.
+- **Sources** (`/sources`) — *Which sources are healthy?* calls, failures and the remaining quota
+  per collector.
+- **Logs** (`/logs`) — *What went wrong?* `system_logs`, newest first.
+
+All six are read-only. The three list screens (`/posts`, `/alerts`, `/logs`) show 25, 50, 100 or 200
+rows per page and say so when a requested page lies beyond the last one.
 
 `cd web && npm start` serves the same app on port 4200 for development and proxies `/api` to
 `127.0.0.1:8088`.

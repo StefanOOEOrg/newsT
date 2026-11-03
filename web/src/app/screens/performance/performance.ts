@@ -1,21 +1,18 @@
-import { ChangeDetectionStrategy, Component } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
+
+import { PerformanceStore } from './performance.store';
 
 /**
- * Placeholder for `/performance` - *Was it right?*
+ * The performance screen `/performance` - *Was it right?*
  *
- * The real screen (hit rate per horizon, per alert type, from `alert_performance`) arrives with
- * #58; this component only proves the route, the shell and the layout.
+ * The hit rate overall, per alert type and for the one horizon the API reports (7 days). The
+ * aggregation lives in the store; the component renders it (#58).
  */
 @Component({
   selector: 'app-performance',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  template: `
-    <section class="screen">
-      <h1>Performance</h1>
-      <p class="hint">
-        Was it right? The hit rate per horizon and per alert type arrives with #58.
-      </p>
-    </section>
-  `,
+  templateUrl: './performance.html',
 })
-export class Performance {}
+export class Performance {
+  protected readonly store = inject(PerformanceStore);
+}

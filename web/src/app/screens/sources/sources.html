@@ -1,0 +1,67 @@
+<section class="screen">
+  <h1>Sources</h1>
+  <p class="hint">
+    Which sources are healthy? Calls today, failures, the last run and the budget left.
+  </p>
+
+  <div class="toolbar">
+    <button type="button" (click)="store.reload()" [disabled]="store.loading()">Refresh</button>
+  </div>
+
+  @if (store.error(); as failure) {
+    <p class="error" data-testid="error">
+      Could not load the sources (HTTP {{ failure.status }}). {{ failure.message }}
+    </p>
+  } @else if (store.empty()) {
+    <p class="empty" data-testid="empty">
+      No collector is configured — run <code>newstrading init-db</code> to seed
+      <code>rate_limit_config</code>.
+    </p>
+  } @else {
+    <div class="cards">
+      <div class="card">
+        <div class="card-label">Collectors</div>
+        <div class="card-value">{{ store.summary().collectors }}</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Failing today</div>
+        <div class="card-value">{{ store.summary().failing }}</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Disabled</div>
+        <div class="card-value">{{ store.summary().disabled }}</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <table class="data">
+        <thead>
+          <tr>
+            <th>Collector</th>
+            <th>Last run</th>
+            <th class="num">Calls today</th>
+            <th class="num">Failures today</th>
+            <th class="num">Errors all time</th>
+            <th class="num">Quota limit</th>
+            <th class="num">Quota left</th>
+            <th>Enabled</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (row of store.rows(); track row.collector) {
+            <tr>
+              <td>{{ row.collector }}</td>
+              <td>{{ row.lastRun }}</td>
+              <td class="num">{{ row.calls }}</td>
+              <td class="num">{{ row.failures }}</td>
+              <td class="num">{{ row.totalErrors }}</td>
+              <td class="num">{{ row.quotaLimit }}</td>
+              <td class="num">{{ row.quotaRemaining }}</td>
+              <td>{{ row.enabled }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+</section>

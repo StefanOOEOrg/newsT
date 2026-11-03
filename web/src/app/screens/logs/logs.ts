@@ -1,21 +1,23 @@
-import { ChangeDetectionStrategy, Component } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
+
+import { PAGE_SIZES } from '../paging';
+import { LOG_LEVELS, LogsStore } from './logs.store';
 
 /**
- * Placeholder for `/logs` - *What went wrong?*
+ * The logs screen `/logs` - *What went wrong?*
  *
- * The real screen (paged `system_logs`, newest first, filter by level) arrives with #58; this
- * component only proves the route, the shell and the layout.
+ * `system_logs`, newest first, one level pill per line, the level filter and the pager. The store
+ * owns the window, the filter and the request (#58).
  */
 @Component({
   selector: 'app-logs',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  template: `
-    <section class="screen">
-      <h1>Logs</h1>
-      <p class="hint">
-        What went wrong? The paged system logs with the level filter arrive with #58.
-      </p>
-    </section>
-  `,
+  templateUrl: './logs.html',
 })
-export class Logs {}
+export class Logs {
+  protected readonly store = inject(LogsStore);
+  /** The levels Python logging writes into `system_logs.level`. */
+  protected readonly levels = LOG_LEVELS;
+  /** The page sizes of the pager's selector (#59). */
+  protected readonly pageSizes = PAGE_SIZES;
+}
