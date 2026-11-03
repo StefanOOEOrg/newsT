@@ -30,7 +30,7 @@ KEYED_SETTINGS = replace(
     alphavantage_api_key="alphavantage-key",
 )
 
-COMMANDS = ("init-db", "collect", "analyze", "notify")
+COMMANDS = ("init-db", "collect", "analyze", "notify", "dashboard")
 
 CONFIGURED = (
     "DATABASE_URL",
@@ -193,7 +193,7 @@ def install_collection(environment, collectors, assets=("first",)):
     return names, store
 
 
-def test_build_parser_exposes_the_four_commands():
+def test_build_parser_exposes_every_command():
     """Each command is its own sub-parser, and the parser knows its name."""
     parser = build_parser()
 
@@ -426,6 +426,42 @@ def test_main_notify_dispatches_to_the_notification_service(environment):
 
     assert services[0].runs == 1
     assert services[0].settings.database_url == URL
+
+
+def test_main_dashboard_dispatches_to_serve_on_the_loopback_host(environment):
+    """``dashboard`` serves on 127.0.0.1 with the port the command was given."""
+    environment.setenv("DATABASE_URL", URL)
+    calls = []
+    environment.setattr(
+        "newstrading.dashboard.api.serve",
+        lambda settings, host="127.0.0.1", port=8088: calls.append((settings, host, port)),
+    )
+
+    assert main(["dashboard", "--port", "9099"]) == 0
+
+    assert [(host, port) for _settings, host, port in calls] == [("127.0.0.1", 9099)]
+    assert calls[0][0].database_url == URL
+
+
+def test_dashboard_without_a_port_uses_the_documented_default(environment):
+    """The port flag is optional and defaults to 8088."""
+    environment.setenv("DATABASE_URL", URL)
+    ports = []
+    environment.setattr(
+        "newstrading.dashboard.api.serve",
+        lambda settings, host="127.0.0.1", port=8088: ports.append(port),
+    )
+
+    assert main(["dashboard"]) == 0
+
+    assert ports == [8088]
+
+
+def test_the_dashboard_help_mentions_the_port_flag(capsys):
+    """``dashboard --help`` documents the port option."""
+    assert main(["dashboard", "--help"]) == 0
+
+    assert "--port" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("command", COMMANDS)
