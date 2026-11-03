@@ -5,8 +5,8 @@ import { PerformanceStore } from './performance.store';
 /**
  * The performance screen `/performance` - *Was it right?*
  *
- * The hit rate overall, per alert type and for the one horizon the API reports (7 days). The
- * aggregation lives in the store; the component renders it (#58).
+ * The hit rate per horizon (1d, 3d, 7d) and per alert type, exactly as `/api/performance`
+ * aggregates it; the store maps the answer, the component renders it (#72).
  */
 @Component({
   selector: 'app-performance',

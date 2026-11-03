@@ -2,131 +2,141 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { Observable, of, throwError } from 'rxjs';
 
-import { AlertsQuery, AlertsService } from '../../api/alerts.service';
-import { AlertRow, Page } from '../../api/models';
-import { alertRowsFixture, pageOf } from '../../api/testing/fixtures';
+import { PerformanceAnswer } from '../../api/models';
+import { PerformanceService } from '../../api/performance.service';
 import { PerformanceStore } from './performance.store';
 
-/** In-memory `/api/alerts` answer of the spec: the only source of the performance screen. */
-class FakeAlerts {
-  answer: Page<AlertRow> = pageOf(alertRowsFixture(), 2);
-  failure: HttpErrorResponse | null = null;
-  readonly queries: AlertsQuery[] = [];
+/**
+ * In-memory `/api/performance` answer of the spec: the three horizons the endpoint computes and
+ * two per-type rows for the 7d horizon. The 3d horizon has no alert yet, so its `hit_rate` is
+ * `null`; the 7d horizon was judged and every alert missed, so its `hit_rate` is a real `0`.
+ */
+function answerFixture(): PerformanceAnswer {
+  return {
+    horizons: [
+      { horizon: '1d', alerts: 40, correct: 25, hit_rate: 0.625 },
+      { horizon: '3d', alerts: 0, correct: 0, hit_rate: null },
+      { horizon: '7d', alerts: 40, correct: 0, hit_rate: 0.0 },
+    ],
+    by_type: [
+      { alert_type: 'price_spike', horizon: '7d', alerts: 30, correct: 9, hit_rate: 0.3 },
+      { alert_type: 'volume_spike', horizon: '7d', alerts: 10, correct: 0, hit_rate: 0.0 },
+    ],
+  };
+}
 
-  list(query: AlertsQuery): Observable<Page<AlertRow>> {
-    this.queries.push(query);
+/** Answers `GET /api/performance` from memory - the only source of the performance screen. */
+class FakePerformance {
+  answer: PerformanceAnswer = answerFixture();
+  failure: HttpErrorResponse | null = null;
+  readonly calls: number[] = [];
+
+  get(): Observable<PerformanceAnswer> {
+    this.calls.push(this.calls.length + 1);
     return this.failure ? throwError(() => this.failure) : of(structuredClone(this.answer));
   }
 }
 
-function setup(fake: FakeAlerts): PerformanceStore {
-  TestBed.configureTestingModule({ providers: [{ provide: AlertsService, useValue: fake }] });
+function setup(fake: FakePerformance): PerformanceStore {
+  TestBed.configureTestingModule({ providers: [{ provide: PerformanceService, useValue: fake }] });
   const store = TestBed.inject(PerformanceStore);
   TestBed.tick();
   return store;
 }
 
 describe('PerformanceStore', () => {
-  it('maps the full payload onto its signals', () => {
-    const fake = new FakeAlerts();
+  it('reads the three horizons from one /api/performance answer', () => {
+    const fake = new FakePerformance();
     const store = setup(fake);
 
-    expect(fake.queries).toEqual([{ page: 1, per_page: 200, severity: null }]);
-    expect(store.items()).toEqual(alertRowsFixture());
-    expect(store.error()).toBeNull();
-    expect(store.empty()).toBe(false);
-    expect(store.evaluated()).toBe(1);
-    expect(store.hits()).toBe(1);
-    expect(store.misses()).toBe(0);
-    expect(store.hitRate()).toBe(1);
-    expect(store.hitRateLabel()).toBe('100.0 %');
-    expect(store.averageReturn()).toBe(0.0412);
-    expect(store.averageReturnLabel()).toBe('+4.1 %');
+    expect(fake.calls).toHaveLength(1);
+    expect(store.horizons()).toEqual([
+      { horizon: '1d', alerts: '40', correct: '25', rate: '62.5 %' },
+      { horizon: '3d', alerts: '0', correct: '0', rate: '—' },
+      { horizon: '7d', alerts: '40', correct: '0', rate: '0 %' },
+    ]);
   });
 
-  it('groups the hit rate per alert type', () => {
-    const fake = new FakeAlerts();
-    const store = setup(fake);
+  it('renders a null hit rate as the em dash and a zero rate as 0 %', () => {
+    const store = setup(new FakePerformance());
+
+    expect(store.horizons()[1].rate).toBe('—');
+    expect(store.horizons()[2].rate).toBe('0 %');
+  });
+
+  it('maps the by_type rows in the order the API returns them', () => {
+    const store = setup(new FakePerformance());
 
     expect(store.rows()).toEqual([
       {
-        alertType: 'long_signal',
-        evaluated: '1',
-        hits: '1',
-        misses: '0',
-        rate: '100.0 %',
-        averageReturn: '+4.1 %',
+        alertType: 'price_spike',
+        horizon: '7d',
+        alerts: '30',
+        correct: '9',
+        rate: '30 %',
       },
       {
-        alertType: 'short_signal',
-        evaluated: '0',
-        hits: '0',
-        misses: '0',
-        rate: '—',
-        averageReturn: '—',
+        alertType: 'volume_spike',
+        horizon: '7d',
+        alerts: '10',
+        correct: '0',
+        rate: '0 %',
       },
     ]);
   });
 
-  it('reports the one horizon the API exposes', () => {
-    const fake = new FakeAlerts();
-    const store = setup(fake);
-
-    expect(store.horizons()).toEqual([
-      { horizon: '7d', evaluated: '1', hits: '1', misses: '0', rate: '100.0 %' },
-    ]);
-  });
-
-  it('maps an empty payload to the empty state, not a zero hit rate', () => {
-    const fake = new FakeAlerts();
-    fake.answer = { items: [], total: 0, page: 1, per_page: 200 };
+  it('keeps the empty state for an answer without a single alert', () => {
+    const fake = new FakePerformance();
+    fake.answer = {
+      horizons: [
+        { horizon: '1d', alerts: 0, correct: 0, hit_rate: null },
+        { horizon: '3d', alerts: 0, correct: 0, hit_rate: null },
+        { horizon: '7d', alerts: 0, correct: 0, hit_rate: null },
+      ],
+      by_type: [],
+    };
     const store = setup(fake);
 
     expect(store.empty()).toBe(true);
-    expect(store.items()).toEqual([]);
     expect(store.rows()).toEqual([]);
+    expect(store.horizons().map((row) => row.rate)).toEqual(['—', '—', '—']);
+  });
+
+  it('leaves no numbers and sets the error when the call fails', () => {
+    const fake = new FakePerformance();
+    fake.failure = new HttpErrorResponse({ status: 500, statusText: 'Server Error' });
+    const store = setup(fake);
+
+    expect(store.error()).toEqual({ status: 500, message: 'Server Error' });
     expect(store.horizons()).toEqual([]);
-    expect(store.evaluated()).toBe(0);
-    expect(store.hitRate()).toBeNull();
-    expect(store.hitRateLabel()).toBe('—');
-  });
-
-  it('keeps an unjudged alert null instead of counting it as a miss', () => {
-    const fake = new FakeAlerts();
-    const store = setup(fake);
-
-    expect(store.items()[1].correct_7d).toBeNull();
-    expect(store.evaluated()).toBe(1);
-    expect(store.misses()).toBe(0);
-  });
-
-  it('sets the error signal with the status when the call fails', () => {
-    const fake = new FakeAlerts();
-    fake.failure = new HttpErrorResponse({ status: 503, statusText: 'Service Unavailable' });
-    const store = setup(fake);
-
-    expect(store.error()).toEqual({ status: 503, message: 'Service Unavailable' });
-    expect(store.items()).toEqual([]);
+    expect(store.rows()).toEqual([]);
     expect(store.empty()).toBe(false);
-    expect(store.hitRate()).toBeNull();
+    expect(store.loading()).toBe(false);
   });
 
-  it('reads every page the API reports', () => {
-    const rows = alertRowsFixture();
-    const queries: AlertsQuery[] = [];
-    const paged = {
-      list(query: AlertsQuery): Observable<Page<AlertRow>> {
-        queries.push(query);
-        return of(query.page === 1 ? pageOf(rows, 3, 1, 200) : pageOf([rows[0]], 3, 2, 200));
-      },
-    };
-    TestBed.configureTestingModule({ providers: [{ provide: AlertsService, useValue: paged }] });
-    const store = TestBed.inject(PerformanceStore);
+  it('clears the numbers of an earlier answer when a refresh fails', () => {
+    const fake = new FakePerformance();
+    const store = setup(fake);
+
+    expect(store.horizons()).toHaveLength(3);
+
+    fake.failure = new HttpErrorResponse({ status: 503, statusText: 'Service Unavailable' });
+    store.reload();
     TestBed.tick();
 
-    expect(queries.map((query) => query.page)).toEqual([1, 2]);
-    expect(queries.every((query) => query.per_page === 200)).toBe(true);
-    expect(store.items()).toHaveLength(3);
-    expect(store.loading()).toBe(false);
+    expect(store.horizons()).toEqual([]);
+    expect(store.error()).toEqual({ status: 503, message: 'Service Unavailable' });
+  });
+
+  it('issues a second call on refresh', () => {
+    const fake = new FakePerformance();
+    const store = setup(fake);
+
+    expect(fake.calls).toHaveLength(1);
+
+    store.reload();
+    TestBed.tick();
+
+    expect(fake.calls).toHaveLength(2);
   });
 });

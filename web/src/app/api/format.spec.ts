@@ -1,6 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
 
-import { bytes, dash, fixed, share, signedPercent, stamp, yesNo } from './format';
+import { bytes, dash, fixed, rate, share, signedPercent, stamp, yesNo } from './format';
 import { toFailure } from './http-failure';
 
 /**
@@ -43,6 +43,15 @@ describe('format', () => {
     expect(yesNo(true)).toBe('yes');
     expect(yesNo(false)).toBe('no');
     expect(yesNo(null)).toBe('—');
+  });
+});
+
+describe('rate', () => {
+  it('renders a hit rate with a dropped decimal, and an em dash for a missing one', () => {
+    expect(rate(null)).toBe('—');
+    expect(rate(0)).toBe('0 %');
+    expect(rate(0.625)).toBe('62.5 %');
+    expect(rate(1)).toBe('100 %');
   });
 });
 

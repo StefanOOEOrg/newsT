@@ -60,6 +60,31 @@ export interface AlertRow {
   readonly correct_7d: boolean | null;
 }
 
+/** One horizon of `GET /api/performance`; `hit_rate` is `null` when the horizon has no alert. */
+export interface HorizonRow {
+  /** `1d`, `3d` or `7d`. */
+  readonly horizon: string;
+  readonly alerts: number;
+  readonly correct: number;
+  /** `correct / alerts`, rounded to three decimals by the API; `null` without an alert. */
+  readonly hit_rate: number | null;
+}
+
+/** One per-type row of `GET /api/performance`, reported for the 7d horizon. */
+export interface TypePerformanceRow {
+  readonly alert_type: string;
+  readonly horizon: string;
+  readonly alerts: number;
+  readonly correct: number;
+  readonly hit_rate: number | null;
+}
+
+/** `GET /api/performance`: the three horizons and the rows per alert type for 7d (#69). */
+export interface PerformanceAnswer {
+  readonly horizons: HorizonRow[];
+  readonly by_type: TypePerformanceRow[];
+}
+
 /** One row of `GET /api/sources`: the rate-limit config joined with usage and statistics. */
 export interface SourceRow {
   readonly collector: string;
@@ -154,22 +179,20 @@ export interface LogView {
 /** Colour class of a log level, mapped onto the `--err`/`--warn`/`--ok`/`--muted` tokens. */
 export type LogTone = 'err' | 'warn' | 'ok' | 'muted';
 
-/** The hit rate of one alert type, as the performance table prints it. */
+/** One alert type's 7d performance, as the performance table prints it. */
 export interface PerformanceView {
   readonly alertType: string;
-  readonly evaluated: string;
-  readonly hits: string;
-  readonly misses: string;
+  readonly horizon: string;
+  readonly alerts: string;
+  readonly correct: string;
   readonly rate: string;
-  readonly averageReturn: string;
 }
 
-/** The hit rate of one evaluation horizon. */
+/** The hit rate of one evaluation horizon, as the horizons table prints it. */
 export interface HorizonView {
   readonly horizon: string;
-  readonly evaluated: string;
-  readonly hits: string;
-  readonly misses: string;
+  readonly alerts: string;
+  readonly correct: string;
   readonly rate: string;
 }
 
