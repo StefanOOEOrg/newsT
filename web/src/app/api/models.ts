@@ -185,7 +185,6 @@ export interface PerformanceView {
   readonly horizon: string;
   readonly alerts: string;
   readonly correct: string;
-  readonly misses: string;
   readonly rate: string;
 }
 
@@ -194,7 +193,6 @@ export interface HorizonView {
   readonly horizon: string;
   readonly alerts: string;
   readonly correct: string;
-  readonly misses: string;
   readonly rate: string;
 }
 

@@ -69,6 +69,20 @@ export function share(value: number | null | undefined): string {
   return `${(value * 100).toFixed(1)} %`;
 }
 
+/**
+ * A hit rate (`0.625` = 62.5 %) as the performance table prints it.
+ *
+ * `null` (nothing judged) is the em dash, never `0 %`; a real `0` is `0 %`; a whole percentage
+ * drops the useless decimal (`100 %`), everything else keeps one (`62.5 %`).
+ */
+export function rate(value: number | null): string {
+  if (value === null) {
+    return DASH;
+  }
+  const points = Math.round(value * 1000) / 10;
+  return `${Number.isInteger(points) ? points : points.toFixed(1)} %`;
+}
+
 /** A nullable boolean as `yes`/`no`, or the em dash when nothing decided it yet. */
 export function yesNo(value: boolean | null | undefined): string {
   if (value === null || value === undefined) {

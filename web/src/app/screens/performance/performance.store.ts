@@ -1,6 +1,6 @@
 import { Injectable, computed, effect, inject, signal, untracked } from '@angular/core';
 
-import { DASH, dash } from '../../api/format';
+import { dash, rate } from '../../api/format';
 import { Failure, toFailure } from '../../api/http-failure';
 import { HorizonView, PerformanceAnswer, PerformanceView } from '../../api/models';
 import { PerformanceService } from '../../api/performance.service';
@@ -13,6 +13,10 @@ import { PerformanceService } from '../../api/performance.service';
  * the database counts once, the store only maps. A `hit_rate` of `null` means "no alert in this
  * horizon" and stays `null` up to the template, which prints the em dash; a real `0` prints as
  * `0 %`.
+ *
+ * There is no miss column: `correct_Xd` is `NULL` for every alert nobody has judged yet, so
+ * `alerts - correct` would count unjudged alerts as wrong. The API has no miss count and this
+ * screen does not invent one.
  */
 @Injectable({ providedIn: 'root' })
 export class PerformanceStore {
@@ -31,8 +35,7 @@ export class PerformanceStore {
       horizon: dash(row.horizon),
       alerts: dash(row.alerts),
       correct: dash(row.correct),
-      misses: dash(row.alerts - row.correct),
-      rate: percent(row.hit_rate),
+      rate: rate(row.hit_rate),
     })),
   );
 
@@ -43,8 +46,7 @@ export class PerformanceStore {
       horizon: dash(row.horizon),
       alerts: dash(row.alerts),
       correct: dash(row.correct),
-      misses: dash(row.alerts - row.correct),
-      rate: percent(row.hit_rate),
+      rate: rate(row.hit_rate),
     })),
   );
 
@@ -87,18 +89,4 @@ export class PerformanceStore {
   reload(): void {
     this.request.update((count) => count + 1);
   }
-}
-
-/**
- * The `hit_rate` of one horizon or type as the tables print it.
- *
- * `null` (nothing judged) is the em dash, never `0 %`; a real `0.0` is `0 %`; a whole percentage
- * drops the useless decimal (`100 %`), everything else keeps one (`62.5 %`).
- */
-function percent(value: number | null): string {
-  if (value === null) {
-    return DASH;
-  }
-  const points = Math.round(value * 1000) / 10;
-  return `${Number.isInteger(points) ? points : points.toFixed(1)} %`;
 }

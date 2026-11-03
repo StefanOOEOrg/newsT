@@ -51,9 +51,9 @@ describe('PerformanceStore', () => {
 
     expect(fake.calls).toHaveLength(1);
     expect(store.horizons()).toEqual([
-      { horizon: '1d', alerts: '40', correct: '25', misses: '15', rate: '62.5 %' },
-      { horizon: '3d', alerts: '0', correct: '0', misses: '0', rate: '—' },
-      { horizon: '7d', alerts: '40', correct: '0', misses: '40', rate: '0 %' },
+      { horizon: '1d', alerts: '40', correct: '25', rate: '62.5 %' },
+      { horizon: '3d', alerts: '0', correct: '0', rate: '—' },
+      { horizon: '7d', alerts: '40', correct: '0', rate: '0 %' },
     ]);
   });
 
@@ -73,7 +73,6 @@ describe('PerformanceStore', () => {
         horizon: '7d',
         alerts: '30',
         correct: '9',
-        misses: '21',
         rate: '30 %',
       },
       {
@@ -81,7 +80,6 @@ describe('PerformanceStore', () => {
         horizon: '7d',
         alerts: '10',
         correct: '0',
-        misses: '10',
         rate: '0 %',
       },
     ]);

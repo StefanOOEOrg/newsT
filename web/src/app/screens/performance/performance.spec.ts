@@ -51,9 +51,9 @@ describe('Performance screen', () => {
 
     expect(el.querySelector('h1')?.textContent?.trim()).toBe('Performance');
     expect(cells(el, '[data-testid="horizons"]')).toEqual([
-      ['1d', '40', '25', '15', '62.5 %'],
-      ['3d', '0', '0', '0', '—'],
-      ['7d', '40', '0', '40', '0 %'],
+      ['1d', '40', '25', '62.5 %'],
+      ['3d', '0', '0', '—'],
+      ['7d', '40', '0', '0 %'],
     ]);
   });
 
@@ -61,8 +61,8 @@ describe('Performance screen', () => {
     const el = render(new FakePerformance()).nativeElement as HTMLElement;
 
     expect(cells(el, '[data-testid="types"]')).toEqual([
-      ['price_spike', '7d', '30', '9', '21', '30 %'],
-      ['volume_spike', '7d', '10', '0', '10', '0 %'],
+      ['price_spike', '7d', '30', '9', '30 %'],
+      ['volume_spike', '7d', '10', '0', '0 %'],
     ]);
   });
 
