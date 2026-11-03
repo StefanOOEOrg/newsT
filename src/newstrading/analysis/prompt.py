@@ -8,6 +8,7 @@ carries braces of its own, and ``format`` would read them as missing keys and ra
 """
 
 import json
+import threading
 from collections.abc import Callable
 from typing import Any
 
@@ -70,6 +71,7 @@ class PromptBuilder:
         self.template_loader = template_loader or (lambda: DEFAULT_PROMPT_TEMPLATE)
         self.content_max_length = content_max_length
         self._cached_template: str | None = None
+        self._template_lock = threading.Lock()
 
     @property
     def template(self) -> str:
@@ -82,19 +84,25 @@ class PromptBuilder:
             * The loader runs at most once per cache generation, even across many
               :meth:`build` calls — one prompt per post must not mean one query per post.
             * The loaded text is cached as is, empty string included.
+            * The cache is filled under a lock, so a batch that builds prompts from
+              several threads still loads the template once and never hands a half-built
+              cache to a second thread.
         """
-        if self._cached_template is None:
-            self._cached_template = self.template_loader()
-        return self._cached_template
+        with self._template_lock:
+            if self._cached_template is None:
+                self._cached_template = self.template_loader()
+            return self._cached_template
 
     def reload(self) -> None:
         """Drop the cached template so the next :meth:`template` loads it again.
 
         Contract:
             * Never calls the loader itself.
-            * Safe on a builder that has not loaded yet.
+            * Safe on a builder that has not loaded yet, and safe while another thread
+              is reading :attr:`template`.
         """
-        self._cached_template = None
+        with self._template_lock:
+            self._cached_template = None
 
     def build(self, post: Post, asset: Asset) -> str:
         """Fill the template for ``post`` and its ``asset``.
