@@ -23,7 +23,7 @@ from newstrading.analysis.service import Analyzer
 from newstrading.config import Settings
 
 URL = "postgresql://app:***@db.internal:5432/newstrading"
-SETTINGS = Settings(database_url=URL, anthropic_api_key="sk-test")
+SETTINGS = Settings(database_url=URL)
 
 CREATED_AT = datetime(2026, 1, 5, 14, 30)
 
