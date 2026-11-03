@@ -28,7 +28,15 @@ from newstrading.collectors.factories import SOURCE_NAMES, build_registry
 from newstrading.collectors.posts import PostStore
 from newstrading.collectors.prices import PriceStore, StockPriceCollector
 from newstrading.collectors.registry import CollectorError
-from newstrading.config import Settings, from_env
+from newstrading.config import (
+    DEFAULT_LLM_MAX_CONCURRENCY,
+    DEFAULT_LLM_MAX_TOKENS,
+    DEFAULT_LLM_PROVIDER,
+    LLM_MAX_CONCURRENCY_RANGE,
+    LLM_PROVIDERS,
+    Settings,
+    from_env,
+)
 from newstrading.db import connect
 from newstrading.errors import CollectorConfigError, ConfigError, NewsTradingError
 from newstrading.keywords import KeywordTracker
@@ -56,6 +64,13 @@ REQUIRED_VARIABLES: dict[str, tuple[str, ...]] = {
     "notify": ("DATABASE_URL",),
     "dashboard": ("DATABASE_URL",),
 }
+
+LLM_OVERRIDES: tuple[tuple[str, str], ...] = (
+    ("llm_provider", "LLM_PROVIDER"),
+    ("llm_max_tokens", "LLM_MAX_TOKENS"),
+    ("llm_max_concurrency", "LLM_MAX_CONCURRENCY"),
+)
+"""Arguments of ``analyze`` and the variable each one replaces for that run."""
 
 _SCHEMA_FILE = "schema.sql"
 _RESET_FILE = "reset.sql"
@@ -88,7 +103,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="drop every table of the schema before creating it again (destroys all data)",
     )
     commands.add_parser("collect", help="run one collection pass over every source")
-    commands.add_parser("analyze", help="run one analysis pass over the waiting posts")
+    analysis = commands.add_parser(
+        "analyze",
+        help="run one analysis pass over the waiting posts",
+        description="Run one analysis pass. The LLM flags replace their environment "
+        "variable for this run only; without them LLM_PROVIDER, LLM_MAX_TOKENS and "
+        "LLM_MAX_CONCURRENCY of the environment apply.",
+    )
+    analysis.add_argument(
+        "--llm-provider",
+        metavar="NAME",
+        help="provider of the analysis calls, replaces LLM_PROVIDER "
+        f"(default: {DEFAULT_LLM_PROVIDER}; one of {', '.join(LLM_PROVIDERS)})",
+    )
+    analysis.add_argument(
+        "--llm-max-tokens",
+        metavar="N",
+        help="token budget of one answer, replaces LLM_MAX_TOKENS "
+        f"(default: {DEFAULT_LLM_MAX_TOKENS})",
+    )
+    analysis.add_argument(
+        "--llm-max-concurrency",
+        metavar="N",
+        help="model calls in flight, replaces LLM_MAX_CONCURRENCY "
+        f"(default: {DEFAULT_LLM_MAX_CONCURRENCY}; "
+        f"{LLM_MAX_CONCURRENCY_RANGE[0]}..{LLM_MAX_CONCURRENCY_RANGE[1]})",
+    )
     commands.add_parser("notify", help="run one notification pass")
     dashboard = commands.add_parser(
         "dashboard",
@@ -106,6 +146,24 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _llm_overrides(arguments: argparse.Namespace) -> dict[str, str]:
+    """Return the LLM settings given on the command line, keyed by variable name.
+
+    Args:
+        arguments: The parsed command line. A command other than ``analyze`` has none
+            of the flag attributes, so it yields an empty mapping.
+
+    Returns:
+        One entry per flag that was given, ready to replace the environment variable
+        of the same name. An empty mapping when no flag was given.
+    """
+    return {
+        variable: value
+        for attribute, variable in LLM_OVERRIDES
+        if (value := getattr(arguments, attribute, None)) is not None
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run one command and return the process exit code.
 
@@ -119,7 +177,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         # ``--help`` and ``--version`` end here, as does a missing command (usage, code 2).
         return int(stop.code or EXIT_OK)
     try:
-        settings = settings_for(arguments.command)
+        overrides = _llm_overrides(arguments)
+        # The flags replace the variables before ``from_env`` reads them, so they pass
+        # the same validation and win over a value the environment already holds.
+        source = {**os.environ, **overrides} if overrides else None
+        settings = settings_for(arguments.command, source)
         configure_logging(settings)
         reset = getattr(arguments, "reset", False)
         port = getattr(arguments, "port", DEFAULT_DASHBOARD_PORT)
