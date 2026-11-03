@@ -1,17 +1,20 @@
 """Tests for newstrading.analysis.performance.
 
 The tracker sits between the alert table and the price side, so every case here drives a
-fake connection and a fake price provider: no database, no network. The expected values
+fake connection and a fake price provider: no database server, no network. The verdict
+cases additionally run the update statement against SQLite in memory, because only an
+engine shows whether the CASE writes TRUE, FALSE or NULL. The expected values
 are the legacy ones — the return formula, the 0.005 direction threshold and the four
 decimal places come from ``analyzer/performance_tracker.py`` and
 ``shared/price_fetcher.py``.
 """
 
+import sqlite3
 from datetime import date, datetime
 
 import pytest
 
-from newstrading.analysis.performance import PerformanceError, PerformanceTracker
+from newstrading.analysis.performance import UPDATE_SQL, PerformanceError, PerformanceTracker
 from newstrading.config import Settings
 
 ALERT_DAY = datetime(2026, 1, 5, 14, 30)
@@ -262,7 +265,7 @@ def test_the_three_legacy_directions_are_written():
 
     row = connection.updated[0]
     assert tuple(row[10:13]) == ("bullish", "bullish", "bullish")
-    assert row[13] == 12  # the record id travels as the WHERE parameter
+    assert row[16] == 12  # the record id travels as the WHERE parameter, after the verdicts
 
 
 def test_a_missing_horizon_stays_none():
@@ -310,6 +313,133 @@ def test_update_existing_records_passes_the_limit_as_a_parameter():
         params for sql, params in connection.statements if "FROM alert_performance ap" in sql
     )
     assert params == (4,)
+
+
+# --- correctness, judged when the horizon closes ------------------------------------
+
+UPDATE_IN_SQLITE = UPDATE_SQL.replace("NOW()", "CURRENT_TIMESTAMP").replace("%s", "?")
+
+VERDICT_SCHEMA = """
+    CREATE TABLE alert_performance (
+        id INTEGER PRIMARY KEY,
+        price_1d_later REAL,
+        price_3d_later REAL,
+        price_7d_later REAL,
+        price_14d_later REAL,
+        price_30d_later REAL,
+        return_1d REAL,
+        return_3d REAL,
+        return_7d REAL,
+        return_14d REAL,
+        return_30d REAL,
+        predicted_direction TEXT,
+        actual_direction_1d TEXT,
+        actual_direction_3d TEXT,
+        actual_direction_7d TEXT,
+        correct_1d INTEGER,
+        correct_3d INTEGER,
+        correct_7d INTEGER,
+        last_updated TIMESTAMP
+    )
+"""
+
+
+def verdicts_after(row, predicted_direction):
+    """Run the real update statement against an in-memory SQLite table.
+
+    The fake cursor proves which columns the statement names and in which order the
+    parameters travel; only an engine can show that the CASE over ``predicted_direction``
+    yields TRUE, FALSE or NULL. SQLite evaluates the same CASE, so the statement runs
+    with its placeholders and ``NOW()`` translated, against one row carrying the
+    prediction. The verdicts come back as ``None``/``bool``, the types the column holds.
+    """
+    db = sqlite3.connect(":memory:")
+    try:
+        db.execute(VERDICT_SCHEMA)
+        db.execute(
+            "INSERT INTO alert_performance (id, predicted_direction) VALUES (?, ?)",
+            (row[-1], predicted_direction),
+        )
+        db.execute(UPDATE_IN_SQLITE, row)
+        verdicts = db.execute(
+            "SELECT correct_1d, correct_3d, correct_7d FROM alert_performance WHERE id = ?",
+            (row[-1],),
+        ).fetchone()
+    finally:
+        db.close()
+    return tuple(None if value is None else bool(value) for value in verdicts)
+
+
+def verdicts_of_one_update(series, predicted_direction, base=100.0):
+    """Update one record with ``series`` and return the verdicts the statement wrote."""
+    connection = FakeConnection(outdated=[outdated_record(base=base)])
+    tracker = make_tracker(FakePrices(series=series), connection)
+
+    tracker.update_existing_records()
+
+    assert len(connection.updated) == 1
+    return verdicts_after(connection.updated[0], predicted_direction)
+
+
+ONE_DAY = {1: 101.0, 3: None, 7: None, 14: None, 30: None}
+THREE_DAYS = {1: 101.0, 3: 102.0, 7: None, 14: None, 30: None}
+FALLING = {1: 99.0, 3: 98.0, 7: 97.0, 14: None, 30: None}
+
+
+def test_the_first_closed_horizon_gets_a_verdict_and_the_open_ones_stay_null():
+    assert verdicts_of_one_update(ONE_DAY, "bullish") == (True, None, None)
+
+
+def test_the_next_update_judges_the_three_day_horizon():
+    assert verdicts_of_one_update(THREE_DAYS, "bullish") == (True, True, None)
+
+
+def test_the_third_update_judges_the_seven_day_horizon():
+    assert verdicts_of_one_update(FULL_SERIES, "bullish") == (True, True, True)
+
+
+def test_a_wrong_direction_is_false():
+    assert verdicts_of_one_update(FALLING, "bullish") == (False, False, False)
+
+
+def test_a_right_bearish_call_is_true():
+    assert verdicts_of_one_update(FALLING, "bearish") == (True, True, True)
+
+
+def test_a_neutral_prediction_stays_unjudged_in_every_horizon():
+    assert verdicts_of_one_update(ONE_DAY, "neutral") == (None, None, None)
+    assert verdicts_of_one_update(FULL_SERIES, "neutral") == (None, None, None)
+
+
+def test_the_update_sets_all_three_verdict_columns_from_the_prediction():
+    connection = FakeConnection(outdated=[outdated_record()])
+    tracker = make_tracker(FakePrices(series=FULL_SERIES), connection)
+
+    tracker.update_existing_records()
+
+    statement = next(sql for sql, _ in connection.statements if "UPDATE alert_performance" in sql)
+    assignments = statement.split("WHERE id")[0]
+    for horizon in ("1d", "3d", "7d"):
+        assert f"correct_{horizon} =" in assignments
+    assert "predicted_direction = 'neutral'" in assignments
+    assert "= predicted_direction" in assignments
+
+
+def test_the_update_binds_prices_returns_directions_verdicts_then_the_id():
+    connection = FakeConnection(outdated=[outdated_record()])
+    tracker = make_tracker(
+        FakePrices(series={1: 101.0, 3: 99.0, 7: 100.5, 14: None, 30: None}), connection
+    )
+
+    tracker.update_existing_records()
+
+    row = connection.updated[0]
+    assert len(row) == 17
+    assert tuple(row[0:5]) == (101.0, 99.0, 100.5, None, None)
+    assert tuple(row[5:10]) == (0.01, -0.01, 0.005, None, None)
+    assert tuple(row[10:13]) == ("bullish", "bearish", "neutral")
+    assert tuple(row[13:16]) == ("bullish", "bearish", "neutral")  # the comparison input
+    assert row[16] == 12  # the record id travels as the WHERE parameter
 
 
 # --- run_full_update ----------------------------------------------------------------
