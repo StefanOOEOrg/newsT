@@ -4,10 +4,10 @@ import dataclasses
 
 import pytest
 
-from newstrading.config import DEFAULT_AI_MODEL, Settings, from_env
+from newstrading.config import Settings, from_env
 from newstrading.errors import ConfigError, NewsTradingError
 
-REQUIRED = {"DATABASE_URL": "postgresql://user:pw@localhost:5432/newstrading"}
+REQUIRED = {"DATABASE_URL": "postgresql://user:***@localhost:5432/newstrading"}
 
 
 def test_from_env_uses_defaults_for_absent_optionals():
@@ -16,9 +16,6 @@ def test_from_env_uses_defaults_for_absent_optionals():
 
     assert isinstance(settings, Settings)
     assert settings.database_url == REQUIRED["DATABASE_URL"]
-    assert settings.anthropic_api_key == ""
-    assert settings.ai_model == DEFAULT_AI_MODEL
-    assert settings.max_tokens == 512
     assert settings.analysis_interval_minutes == 5
     assert settings.content_max_length == 2000
     assert settings.alert_summary_max_length == 180
@@ -29,13 +26,15 @@ def test_from_env_uses_defaults_for_absent_optionals():
     assert settings.alphavantage_api_key == ""
     assert settings.congress_trades_api_key == ""
     assert settings.congress_trades_api_url == ""
-    assert settings.llm_provider == "local"
     assert settings.llm_base_url == "http://192.168.178.87:8004/v1"
     assert settings.llm_model == "gb10-writing"
     assert settings.llm_api_key == ""
     assert settings.llm_timeout == 60.0
     assert settings.llm_max_tokens == 1024
     assert settings.llm_max_concurrency == 1
+    assert settings.llm_fallback == ""
+    assert settings.llm_fallback_model == settings.llm_model
+    assert settings.llm_fallback_api_key == ""
 
 
 def test_from_env_reads_the_collector_api_keys():
@@ -77,8 +76,6 @@ def test_from_env_reads_overrides():
     env = dict(REQUIRED)
     env.update(
         {
-            "AI_MODEL": "claude-sonnet-4-5",
-            "MAX_TOKENS": "1024",
             "ANALYSIS_INTERVAL_MINUTES": "15",
             "CONTENT_MAX_LENGTH": "500",
             "ALERT_SUMMARY_MAX_LENGTH": "120",
@@ -89,8 +86,6 @@ def test_from_env_reads_overrides():
 
     settings = from_env(env)
 
-    assert settings.ai_model == "claude-sonnet-4-5"
-    assert settings.max_tokens == 1024
     assert settings.analysis_interval_minutes == 15
     assert settings.content_max_length == 500
     assert settings.alert_summary_max_length == 120
@@ -106,8 +101,6 @@ def test_from_env_names_every_missing_required_variable():
     message = str(error.value)
     assert "missing required environment variables" in message
     assert "DATABASE_URL" in message
-    # The model key is only required by the anthropic provider (see below).
-    assert "ANTHROPIC_API_KEY" not in message
 
 
 def test_from_env_treats_empty_required_variable_as_missing():
@@ -118,20 +111,18 @@ def test_from_env_treats_empty_required_variable_as_missing():
     with pytest.raises(ConfigError) as error:
         from_env(env)
 
-    message = str(error.value)
-    assert "DATABASE_URL" in message
-    assert "ANTHROPIC_API_KEY" not in message
+    assert "DATABASE_URL" in str(error.value)
 
 
 def test_from_env_rejects_a_non_integer():
     """A malformed integer names the variable and the offending value."""
     env = dict(REQUIRED)
-    env["MAX_TOKENS"] = "abc"
+    env["LLM_MAX_TOKENS"] = "abc"
 
     with pytest.raises(ConfigError) as error:
         from_env(env)
 
-    assert str(error.value) == "MAX_TOKENS must be an integer, got 'abc'"
+    assert str(error.value) == "LLM_MAX_TOKENS must be an integer, got 'abc'"
 
 
 def test_from_env_rejects_a_non_positive_interval():
@@ -148,13 +139,13 @@ def test_from_env_rejects_a_non_positive_interval():
 def test_from_env_treats_empty_optional_variable_as_default():
     """Optional variables set to an empty string behave like unset ones."""
     env = dict(REQUIRED)
-    env["MAX_TOKENS"] = ""
+    env["LLM_MAX_TOKENS"] = ""
     env["LOG_LEVEL"] = ""
     env["NEWSAPI_KEY"] = ""
 
     settings = from_env(env)
 
-    assert settings.max_tokens == 512
+    assert settings.llm_max_tokens == 1024
     assert settings.log_level == "INFO"
     assert settings.newsapi_key == ""
 
@@ -164,7 +155,7 @@ def test_settings_is_frozen():
     settings = from_env(dict(REQUIRED))
 
     with pytest.raises(dataclasses.FrozenInstanceError):
-        settings.max_tokens = 1  # type: ignore[misc]
+        settings.llm_max_tokens = 1  # type: ignore[misc]
 
 
 def test_config_error_is_a_newstrading_error():
@@ -173,70 +164,109 @@ def test_config_error_is_a_newstrading_error():
 
 
 def test_from_env_reads_the_llm_settings():
-    """The provider switch and the model limits come from the environment."""
+    """The endpoint, the model and the limits come from the environment."""
     env = dict(REQUIRED)
     env.update(
         {
-            "LLM_PROVIDER": "anthropic",
             "LLM_BASE_URL": "http://model.internal:9000/v1",
-            "LLM_MODEL": "local-model",
-            "LLM_API_KEY": "local-key",
+            "LLM_MODEL": "primary-model",
+            "LLM_API_KEY": "primary-key",
             "LLM_TIMEOUT": "12.5",
             "LLM_MAX_TOKENS": "2048",
             "LLM_MAX_CONCURRENCY": "3",
-            "ANTHROPIC_API_KEY": "sk-test",
         }
     )
 
     settings = from_env(env)
 
-    assert settings.llm_provider == "anthropic"
     assert settings.llm_base_url == "http://model.internal:9000/v1"
-    assert settings.llm_model == "local-model"
-    assert settings.llm_api_key == "local-key"
+    assert settings.llm_model == "primary-model"
+    assert settings.llm_api_key == "primary-key"
     assert settings.llm_timeout == 12.5
     assert settings.llm_max_tokens == 2048
     assert settings.llm_max_concurrency == 3
-    assert settings.anthropic_api_key == "sk-test"
 
 
-def test_from_env_starts_with_the_local_provider_without_the_anthropic_key():
-    """The default provider is local and it reads no Anthropic key at all."""
-    settings = from_env(dict(REQUIRED))
-    assert settings.llm_provider == "local"
-    assert settings.anthropic_api_key == ""
+def test_from_env_reads_a_full_fallback_set():
+    """A fallback endpoint, its model and its key are all optional and all read."""
+    env = dict(REQUIRED)
+    env.update(
+        {
+            "LLM_FALLBACK": "https://fallback.internal/v1",
+            "LLM_FALLBACK_MODEL": "backup-model",
+            "LLM_FALLBACK_API_KEY": "backup-key",
+        }
+    )
 
-    explicit = from_env({**REQUIRED, "LLM_PROVIDER": "local", "ANTHROPIC_API_KEY": ""})
-    assert explicit.llm_provider == "local"
-    assert explicit.anthropic_api_key == ""
+    settings = from_env(env)
+
+    assert settings.llm_fallback == "https://fallback.internal/v1"
+    assert settings.llm_fallback_model == "backup-model"
+    assert settings.llm_fallback_api_key == "backup-key"
 
 
-def test_from_env_treats_an_empty_provider_as_the_default():
-    """An empty optional variable behaves like an unset one."""
-    settings = from_env({**REQUIRED, "LLM_PROVIDER": "", "LLM_MAX_CONCURRENCY": ""})
+def test_the_fallback_model_defaults_to_the_primary_model():
+    """Without ``LLM_FALLBACK_MODEL`` the fallback answers with ``LLM_MODEL``."""
+    env = dict(REQUIRED)
+    env.update({"LLM_MODEL": "primary-model", "LLM_FALLBACK": "http://fallback.internal:8000/v1"})
 
-    assert settings.llm_provider == "local"
-    assert settings.llm_max_concurrency == 1
+    settings = from_env(env)
+
+    assert settings.llm_fallback_model == "primary-model"
 
 
-def test_from_env_requires_the_anthropic_key_only_for_the_anthropic_provider():
-    """``LLM_PROVIDER=anthropic`` is the one case that needs the key."""
+def test_from_env_accepts_a_different_endpoint_with_a_trailing_slash():
+    """The trailing slash is not part of the comparison."""
+    env = dict(REQUIRED)
+    env.update(
+        {
+            "LLM_BASE_URL": "http://192.168.178.87:8004/v1",
+            "LLM_FALLBACK": "http://192.168.178.87:8000/v1/",
+        }
+    )
+
+    settings = from_env(env)
+
+    assert settings.llm_fallback == "http://192.168.178.87:8000/v1/"
+
+
+@pytest.mark.parametrize("value", ["fallback.internal", "/v1", "ftp://fallback.internal/v1"])
+def test_from_env_rejects_a_fallback_that_is_not_an_absolute_http_url(value):
+    """A fallback has to be an absolute ``http``/``https`` URL."""
     with pytest.raises(ConfigError) as error:
-        from_env({**REQUIRED, "LLM_PROVIDER": "anthropic"})
-
-    assert str(error.value) == "missing required environment variables: ANTHROPIC_API_KEY"
-
-
-def test_from_env_rejects_an_unknown_provider():
-    """A typo must fail at startup, naming the variable and both allowed values."""
-    with pytest.raises(ConfigError) as error:
-        from_env({**REQUIRED, "LLM_PROVIDER": "openai"})
+        from_env({**REQUIRED, "LLM_FALLBACK": value})
 
     message = str(error.value)
-    assert "LLM_PROVIDER" in message
-    assert "local" in message
-    assert "anthropic" in message
-    assert "openai" in message
+    assert "LLM_FALLBACK" in message
+    assert "http" in message
+
+
+@pytest.mark.parametrize("name", ["LLM_FALLBACK_MODEL", "LLM_FALLBACK_API_KEY"])
+def test_from_env_rejects_a_fallback_setting_without_a_fallback(name):
+    """A model or key for a fallback that does not exist misconfigures the seam."""
+    with pytest.raises(ConfigError) as error:
+        from_env({**REQUIRED, name: "value"})
+
+    assert str(error.value) == f"{name} requires LLM_FALLBACK"
+
+
+def test_from_env_rejects_the_primary_endpoint_as_fallback():
+    """Falling back to the same endpoint buys nothing, even with a trailing slash."""
+    env = dict(REQUIRED)
+    env.update(
+        {
+            "LLM_BASE_URL": "http://192.168.178.87:8004/v1/",
+            "LLM_FALLBACK": "http://192.168.178.87:8004/v1",
+        }
+    )
+
+    with pytest.raises(ConfigError) as error:
+        from_env(env)
+
+    message = str(error.value)
+    assert "LLM_FALLBACK" in message
+    assert "LLM_BASE_URL" in message
+    assert "buys nothing" in message
 
 
 @pytest.mark.parametrize("value", ["0", "-1", "17"])

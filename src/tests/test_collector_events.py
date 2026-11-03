@@ -18,7 +18,6 @@ ASSET = Asset(id=7, name="Tesla", ticker="TSLA", keywords=("tesla",))
 TODAY = date(2026, 11, 2)
 SETTINGS = Settings(
     database_url="postgresql://user:***@localhost:5432/newstrading",
-    anthropic_api_key="sk-test",
     alphavantage_api_key="alpha-key",
 )
 
@@ -174,7 +173,6 @@ def test_a_missing_api_key_yields_no_events_without_a_request():
     """The key is optional at construction; without it there is nothing to ask."""
     settings = Settings(
         database_url=SETTINGS.database_url,
-        anthropic_api_key=SETTINGS.anthropic_api_key,
     )
 
     events, http = collect(settings=settings)

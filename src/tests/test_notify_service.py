@@ -14,7 +14,7 @@ from newstrading.notify.service import (
 )
 
 URL = "postgresql://app:***@db.internal:5432/newstrading"
-SETTINGS = Settings(database_url=URL, anthropic_api_key="sk-test")
+SETTINGS = Settings(database_url=URL)
 
 CHANNELS = ("email", "sms", "push", "webhook")
 

@@ -10,7 +10,7 @@ from newstrading.collectors.posts import PostStore
 from newstrading.config import Settings
 
 URL = "postgresql://app:pw@db.internal:5432/newstrading"
-SETTINGS = Settings(database_url=URL, anthropic_api_key="sk-test")
+SETTINGS = Settings(database_url=URL)
 CREATED = datetime(2026, 11, 1, 9, 30, tzinfo=UTC)
 
 

@@ -21,7 +21,6 @@ from collections.abc import Callable
 from typing import Any
 
 import psycopg2
-from anthropic import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
 from newstrading.analysis.llm import RetryableModelError
 from newstrading.analysis.parser import Analysis, AnalysisParseError, parse_analysis
@@ -42,19 +41,13 @@ Sleep = Callable[[float], None]
 RETRY_DELAYS = (2, 4, 8)
 """Seconds to wait through ``sleep`` for the three attempts of one model call."""
 
-RETRYABLE_ERRORS = (
-    RetryableModelError,
-    RateLimitError,
-    InternalServerError,
-    APITimeoutError,
-    APIConnectionError,
-)
+RETRYABLE_ERRORS = (RetryableModelError,)
 """Failures of the model call that are worth another attempt.
 
-:class:`RetryableModelError` is what the adapters of
+:class:`RetryableModelError` is what the clients of
 :mod:`newstrading.analysis.llm` raise — an empty answer (a spent token budget) is one of
-them. The legacy four stay in the tuple so a completion handed straight to the SDK keeps
-its old retry behaviour.
+them. A terminal :class:`~newstrading.analysis.llm.ModelError` is not in the tuple and
+skips the post at once.
 """
 
 NEUTRAL_ANALYSIS = Analysis(
@@ -161,8 +154,8 @@ class Analyzer:
         Args:
             settings: Settings holding ``database_url`` and ``content_max_length``.
             connector: Connection factory; tests inject a fake.
-            complete: The model call. Production adds the ``sentiment:`` prefill and
-                returns the text the model answered.
+            complete: The model call. Production is ``build_client(settings).complete``;
+                it returns the raw text the model answered.
             sleep: Called with each retry delay; injected so tests do not wait.
             builder: Prompt builder. Defaults to one that reads the template from the
                 database once per run and cuts the content to

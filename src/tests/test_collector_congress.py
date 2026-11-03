@@ -23,7 +23,6 @@ def make_settings(*, api_key: str = "", api_url: str = "") -> Settings:
     """Build settings with the congressional trades source configured as asked."""
     return Settings(
         database_url="postgresql://user:***@localhost:5432/newstrading",
-        anthropic_api_key="sk-test",
         congress_trades_api_key=api_key,
         congress_trades_api_url=api_url,
     )

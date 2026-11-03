@@ -27,7 +27,6 @@ EMPTY_BODIES = {
 
 KEYED_SETTINGS = Settings(
     database_url=URL,
-    anthropic_api_key="sk-test",
     newsapi_key="news-key",
     finnhub_api_key="finnhub-key",
     alphavantage_api_key="alphavantage-key",
@@ -49,7 +48,7 @@ def test_build_registry_registers_every_source():
 
 def test_build_registry_registers_without_building():
     """Registration must not need the API keys; the key is checked on construction."""
-    registry = build_registry(Settings(database_url=URL, anthropic_api_key=""))
+    registry = build_registry(Settings(database_url=URL))
 
     assert registry.names == (
         "alphavantage",
@@ -95,7 +94,7 @@ def test_unknown_name_raises_with_the_known_names():
 )
 def test_a_missing_key_fails_at_construction(source, variable):
     """A keyless source is a configuration error of the registry, not a skipped source."""
-    settings = Settings(database_url=URL, anthropic_api_key="sk-test")
+    settings = Settings(database_url=URL)
 
     with pytest.raises(CollectorError) as error:
         build_registry(settings).create(source, settings)

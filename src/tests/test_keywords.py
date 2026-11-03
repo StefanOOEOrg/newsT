@@ -7,7 +7,7 @@ from newstrading.config import Settings
 from newstrading.keywords import KeywordTracker
 
 URL = "postgresql://app:pw@db.internal:5432/newstrading"
-SETTINGS = Settings(database_url=URL, anthropic_api_key="sk-test")
+SETTINGS = Settings(database_url=URL)
 
 
 class FakeCursor:

@@ -23,7 +23,7 @@ from newstrading.analysis.parser import Analysis
 from newstrading.config import Settings
 
 URL = "postgresql://app:***@db.internal:5432/newstrading"
-SETTINGS = Settings(database_url=URL, anthropic_api_key="sk-test")
+SETTINGS = Settings(database_url=URL)
 
 ASSET_ID = 7
 SUMMARY = "A short summary of the post."

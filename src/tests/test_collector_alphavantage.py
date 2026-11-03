@@ -23,7 +23,6 @@ def make_settings(*, alphavantage_api_key: str = "alpha-key") -> Settings:
     """Build settings with an Alpha Vantage key unless a test overrides it."""
     return Settings(
         database_url="postgresql://user:pw@localhost:5432/newstrading",
-        anthropic_api_key="sk-test",
         alphavantage_api_key=alphavantage_api_key,
     )
 

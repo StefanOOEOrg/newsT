@@ -10,7 +10,7 @@ from newstrading.analysis.prices import DatabasePriceProvider
 from newstrading.config import Settings
 
 URL = "postgresql://app:***@db.internal:5432/newstrading"
-SETTINGS = Settings(database_url=URL, anthropic_api_key="sk-test")
+SETTINGS = Settings(database_url=URL)
 DAY = date(2026, 10, 1)
 ROWS = (
     (datetime(2026, 9, 30, 15, 0), 99.0),

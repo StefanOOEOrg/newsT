@@ -9,7 +9,7 @@ from newstrading.config import Settings
 from newstrading.rate_limiter import MAX_ERROR_MESSAGE_LENGTH, RateLimitDecision, RateLimiter
 
 URL = "postgresql://app:pw@db.internal:5432/newstrading"
-SETTINGS = Settings(database_url=URL, anthropic_api_key="sk-test")
+SETTINGS = Settings(database_url=URL)
 
 
 class FakeCursor:

@@ -1,13 +1,13 @@
-"""The model seam: the one protocol the analyzer calls and the errors it maps.
+"""The model seam: the one protocol the analyzer calls, the errors it maps and the factory.
 
-Every provider adapter — the OpenAI-compatible client of the local GX10, the
-Anthropic client — implements :class:`LLMClient`. The analysis service therefore
-depends on this module only: it sends a prompt, gets raw answer text back, and
-retries :class:`RetryableModelError` while giving up on :class:`ModelError`.
+An endpoint is a URL and a model an id, so nothing in this module names a vendor. The
+transport is the chat-completions protocol; the analysis service depends on
+:class:`LLMClient` only: it sends a prompt, gets raw answer text back, and retries
+:class:`RetryableModelError` while giving up on :class:`ModelError`.
 
-The adapters live in this module as well so the provider SDKs stay importable in a
-single place; both translate their library's failures into the two types below, so
-no caller has to know which provider answered.
+The adapters live in this module so the transport import stays in a single place. They
+translate their library's failures into the two types below, so no caller has to know
+which endpoint answered.
 """
 
 from __future__ import annotations
@@ -16,15 +16,6 @@ import json
 from typing import Any, Protocol, runtime_checkable
 
 import requests
-from anthropic import (
-    Anthropic,
-    AnthropicError,
-    APIConnectionError,
-    APIStatusError,
-    APITimeoutError,
-    InternalServerError,
-    RateLimitError,
-)
 
 from newstrading.config import (
     DEFAULT_LLM_MAX_TOKENS,
@@ -47,63 +38,46 @@ class RetryableModelError(Exception):
 class ModelError(Exception):
     """A model call that failed terminally and is not repeated as it was.
 
-    A rejected request (4xx other than 429), a malformed response body and an SDK
-    error say that the call itself is wrong, not the moment it was made. A second
-    attempt with the same input would only repeat the failure.
+    A rejected request (4xx other than 429), a malformed response body and any other
+    transport error say that the call itself is wrong, not the moment it was made. A
+    second attempt with the same input would only repeat the failure.
     """
 
 
 @runtime_checkable
 class LLMClient(Protocol):
-    """What the analyzer needs from a model provider.
+    """What the analyzer needs from a model client.
 
-    Implementations send the prompt to their provider and return the raw answer text
+    Implementations send the prompt to their endpoint and return the raw answer text
     — fences and all; stripping them is the parser's job. They translate their
-    library's failures into :class:`RetryableModelError` or :class:`ModelError` so
-    that the analysis service never imports a provider SDK.
+    transport's failures into :class:`RetryableModelError` or :class:`ModelError` so
+    that the analysis service never imports a transport library.
     """
 
     def complete(self, prompt: str) -> str:
-        """Send ``prompt`` to the provider and return the raw answer text."""
+        """Send ``prompt`` to the endpoint and return the raw answer text."""
         ...
 
 
 CHAT_COMPLETIONS_PATH = "/chat/completions"
 """Suffix of an OpenAI-compatible base URL that answers a chat prompt."""
 
-PREFILL = "sentiment:"
-"""Assistant turn that opens the Anthropic answer, as in the legacy call."""
-
 TRUNCATED_FINISH_REASON = "length"
 """``finish_reason`` of an answer whose token budget ran out before the verdict."""
 
-_PREFILL_PREFIXES = ("{", "```")
-"""How an answer starts when the model ignored the prefill and answered the object."""
-
 _EXCERPT_LENGTH = 80
-
-_RETRYABLE_ANTHROPIC_ERRORS = (
-    RateLimitError,
-    InternalServerError,
-    APITimeoutError,
-    APIConnectionError,
-)
-"""Anthropic failures another attempt can fix — the four the legacy service retried."""
 
 
 class OpenAICompatibleClient:
-    """The ``/v1/chat/completions`` adapter of the local GB10 servers.
+    """The ``/v1/chat/completions`` adapter of an OpenAI-compatible endpoint.
 
-    One class covers every OpenAI-compatible endpoint of the GX10 — port 8004
-    (``gb10-writing``, the default), 8000 (``gb10-reasoning``) and 8001
-    (``gb10-embedding``). The port is part of ``base_url``; nothing else differs, so the
-    provider is chosen in the configuration, not in the code.
+    The same class covers every such endpoint: the port belongs to ``base_url`` and the
+    model is an id, so an endpoint is chosen in the configuration, not in the code.
 
     Attributes:
         base_url: OpenAI-compatible base URL, e.g. ``http://192.168.178.87:8004/v1``.
         model: Model id sent in the payload, e.g. ``gb10-writing``.
-        api_key: Bearer token; empty sends no ``Authorization`` header, which the GX10
-            servers do not need.
+        api_key: Bearer token; empty sends no ``Authorization`` header.
         timeout: Seconds one call may take; the measured answer needs 9–11 s.
         max_tokens: Token budget of one answer. It must cover the reasoning prefix the
             model writes before the verdict — 1024 is the measured default.
@@ -191,129 +165,87 @@ class OpenAICompatibleClient:
         return headers
 
 
-class AnthropicClient:
-    """The Anthropic adapter, carrying the legacy call and its prefill.
+class FallbackClient:
+    """A client that asks a second endpoint when the first one fails retryably.
 
-    The prefill is the ``assistant`` turn the legacy call sent to keep the answer to the
-    object itself; an answer that ignored it and starts with ``{`` or a fence is passed
-    on unchanged, so the parser reads what the model actually said.
+    A retryable failure of the primary is the one case another endpoint can fix, so the
+    secondary is asked exactly once for that prompt. A terminal failure of the primary
+    says the request itself is wrong and propagates at once.
 
     Attributes:
-        model: Anthropic model id, e.g. ``claude-3-5-haiku-20241022``.
-        max_tokens: Token budget of one answer (``MAX_TOKENS``, the legacy setting).
-        prefill: Assistant turn that opens the answer.
+        primary: The client asked first.
+        secondary: The client asked once when ``primary`` raised
+            :class:`RetryableModelError`.
     """
 
-    def __init__(
-        self,
-        model: str,
-        api_key: str,
-        *,
-        max_tokens: int = DEFAULT_LLM_MAX_TOKENS,
-        prefill: str = PREFILL,
-        client: Any = None,
-    ) -> None:
-        """Store the model and the SDK client; ``client`` is the seam for the tests.
+    def __init__(self, primary: LLMClient, secondary: LLMClient) -> None:
+        """Store both clients; no call is made here.
 
         Args:
-            model: Anthropic model id.
-            api_key: Anthropic API key; empty is accepted here because the configuration
-                already refuses ``LLM_PROVIDER=anthropic`` without one.
-            max_tokens: Token budget of one answer.
-            prefill: Assistant turn that opens the answer.
-            client: ``anthropic.Anthropic``-like object. Defaults to a real client.
+            primary: The client asked first.
+            secondary: The client asked when the primary fails retryably.
         """
-        self.model = model
-        self._max_tokens = max_tokens
-        self._prefill = prefill
-        self._client = client if client is not None else Anthropic(api_key=api_key)
+        self.primary = primary
+        self.secondary = secondary
 
     def complete(self, prompt: str) -> str:
-        """Send ``prompt`` with the prefill and return the raw answer text.
+        """Send ``prompt`` to the primary and, on a retryable failure, to the secondary.
 
         Args:
             prompt: The analysis prompt of one post.
 
         Returns:
-            The answer text, prefixed with :data:`PREFILL` when the model continued the
-            assistant turn instead of writing the object.
+            The answer of the primary, or the answer of the secondary when the primary
+            failed retryably. Both are returned raw, exactly alike.
 
         Raises:
-            RetryableModelError: Rate limit, overload, timeout or connection failure —
-                the legacy retryable four — and an empty or ``max_tokens``-cut answer.
-            ModelError: A rejected request or any other SDK error.
+            ModelError: The primary (or the secondary) rejected the request; the
+                secondary is not asked when the primary already answered terminally.
+            RetryableModelError: Both calls failed retryably. The message holds both
+                texts, primary first: ``"{primary}; fallback: {secondary}"``.
         """
         try:
-            message = self._client.messages.create(
-                model=self.model,
-                max_tokens=self._max_tokens,
-                messages=[
-                    {"role": "user", "content": prompt},
-                    {"role": "assistant", "content": self._prefill},
-                ],
-            )
-        # boundary: retryable first — RateLimitError and InternalServerError are status errors
-        except _RETRYABLE_ANTHROPIC_ERRORS as error:
-            raise RetryableModelError(f"{self.model}: {type(error).__name__}: {error}") from error
-        except (APIStatusError, AnthropicError) as error:
-            raise ModelError(f"{self.model}: {type(error).__name__}: {error}") from error
-        return self._answer(message)
-
-    def _answer(self, message: Any) -> str:
-        """Return the text of ``message``, with the prefill restored when it is bare.
-
-        Raises:
-            RetryableModelError: The answer has no text, or ``stop_reason`` says the
-                budget ran out (``max_tokens``).
-        """
-        stop_reason = getattr(message, "stop_reason", None)
-        content = getattr(message, "content", None) or []
-        text = ""
-        for block in content:
-            if getattr(block, "type", "text") == "text":
-                text = getattr(block, "text", "")
-                break
-        if stop_reason == "max_tokens":
-            raise RetryableModelError(
-                f"{self.model}: the answer was cut off (stop_reason='max_tokens');"
-                " the budget was not enough"
-            )
-        if not text.strip():
-            raise RetryableModelError(
-                f"{self.model}: the answer is empty (stop_reason={stop_reason!r});"
-                " the budget may have been spent before the verdict"
-            )
-        if text.lstrip().startswith(_PREFILL_PREFIXES):
-            return text
-        return self._prefill + text
+            return self.primary.complete(prompt)
+        except RetryableModelError as primary_error:
+            try:
+                return self.secondary.complete(prompt)
+            except RetryableModelError as secondary_error:
+                raise RetryableModelError(
+                    f"{primary_error}; fallback: {secondary_error}"
+                ) from secondary_error
 
 
 def build_client(settings: Settings) -> LLMClient:
-    """Return the adapter ``settings.llm_provider`` selects.
+    """Return the client the settings describe, with the optional fallback.
 
     Args:
-        settings: The resolved settings; the adapter reads its endpoint, model, key,
+        settings: The resolved settings; the client reads its endpoint, model, key,
             timeout and budget from it.
 
     Returns:
-        :class:`AnthropicClient` when the provider is ``anthropic`` — today's behaviour
-        with the legacy ``max_tokens`` and ``ai_model`` — and
-        :class:`OpenAICompatibleClient` on ``llm_base_url``/``llm_model`` for every other
-        value, which ``config.from_env`` has already restricted to ``local``.
+        :class:`OpenAICompatibleClient` on ``llm_base_url``/``llm_model`` when
+        ``llm_fallback`` is empty — the adapter itself, not a wrapper. With a fallback,
+        a :class:`FallbackClient` of that primary and a second
+        :class:`OpenAICompatibleClient` on ``llm_fallback``/``llm_fallback_model``;
+        both share the timeout and the token budget.
     """
-    if settings.llm_provider == "anthropic":
-        return AnthropicClient(
-            settings.ai_model,
-            settings.anthropic_api_key,
-            max_tokens=settings.max_tokens,
-        )
-    return OpenAICompatibleClient(
+    primary = OpenAICompatibleClient(
         settings.llm_base_url,
         settings.llm_model,
         api_key=settings.llm_api_key,
         timeout=settings.llm_timeout,
         max_tokens=settings.llm_max_tokens,
     )
+    if not settings.llm_fallback:
+        return primary
+    secondary = OpenAICompatibleClient(
+        settings.llm_fallback,
+        settings.llm_fallback_model,
+        api_key=settings.llm_fallback_api_key,
+        timeout=settings.llm_timeout,
+        max_tokens=settings.llm_max_tokens,
+    )
+    return FallbackClient(primary, secondary)
 
 
 def _json_body(response: Any, model: str) -> dict:

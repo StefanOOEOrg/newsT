@@ -11,7 +11,6 @@ from newstrading.logging_config import DatabaseLogHandler, configure_logging
 URL = "postgresql://app:secret@db.internal:5432/newstrading"
 SETTINGS = Settings(
     database_url=URL,
-    anthropic_api_key="sk-test",
     log_level="WARNING",
     database_log_level="ERROR",
 )

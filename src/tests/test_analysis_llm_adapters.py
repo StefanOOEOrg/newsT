@@ -1,10 +1,10 @@
-"""Tests for the provider adapters of :mod:`newstrading.analysis.llm`.
+"""Tests for the client seam of :mod:`newstrading.analysis.llm`.
 
 No socket, no key, no database: the OpenAI-compatible adapter runs against a fake
-``requests.Session`` and the Anthropic adapter against a fake ``messages`` client. The
-answers are the ones measured for issue #52 — ``content: null`` with
-``finish_reason: length`` at a small budget, a fenced JSON object at 1024 tokens — so the
-retry classification is pinned to what the models really send.
+``requests.Session`` and the fallback against two fake clients. The answers are the ones
+measured for issue #52 — ``content: null`` with ``finish_reason: length`` at a small
+budget, a fenced JSON object at 1024 tokens — so the retry classification is pinned to
+what the models really send.
 
 The last two cases drive the analyzer over the adapters: a retryable failure is retried
 and the answer after it is stored, an empty answer never becomes a neutral row.
@@ -12,20 +12,11 @@ and the answer after it is stored, an empty answer never becomes a neutral row.
 
 from __future__ import annotations
 
-import httpx
 import pytest
 import requests
-from anthropic import (
-    APIConnectionError,
-    APIStatusError,
-    APITimeoutError,
-    BadRequestError,
-    InternalServerError,
-    RateLimitError,
-)
 
 from newstrading.analysis.llm import (
-    AnthropicClient,
+    FallbackClient,
     LLMClient,
     ModelError,
     OpenAICompatibleClient,
@@ -34,10 +25,10 @@ from newstrading.analysis.llm import (
 )
 from newstrading.analysis.parser import parse_analysis
 from newstrading.analysis.service import Analyzer
-from newstrading.config import Settings
+from newstrading.config import Settings, from_env
 
 URL = "postgresql://app:***@db.internal:5432/newstrading"
-SETTINGS = Settings(database_url=URL, anthropic_api_key="sk-test")
+SETTINGS = Settings(database_url=URL)
 
 LOCAL_DEFAULTS = Settings(database_url=URL)
 
@@ -53,8 +44,6 @@ FENCED_ANSWER = """```json
 ```"""
 
 BARE_ANSWER = '{"sentiment": "positive", "sentiment_score": 0.7, "summary": "Hiring."}'
-
-PREFILL_ANSWER = " positive, score 0.7, category Growth."
 
 
 class FakeResponse:
@@ -103,7 +92,7 @@ def chat_answer(content, finish_reason="stop"):
 
 
 def local_client(response=None, *, error=None, **kwargs):
-    """An OpenAI-compatible adapter over the recorded GX10 endpoint and a fake session."""
+    """An OpenAI-compatible adapter over the recorded endpoint and a fake session."""
     session = FakeSession(response, error=error)
     kwargs.setdefault("base_url", LOCAL_DEFAULTS.llm_base_url)
     kwargs.setdefault("model", LOCAL_DEFAULTS.llm_model)
@@ -111,61 +100,7 @@ def local_client(response=None, *, error=None, **kwargs):
     return OpenAICompatibleClient(session=session, **kwargs), session
 
 
-class FakeMessage:
-    """One content block of an Anthropic answer."""
-
-    def __init__(self, text):
-        self.type = "text"
-        self.text = text
-
-
-class FakeAnthropicAnswer:
-    """An Anthropic message double: a text and the reason the model stopped."""
-
-    def __init__(self, text=None, *, stop_reason="end_turn"):
-        self.content = [] if text is None else [FakeMessage(text)]
-        self.stop_reason = stop_reason
-
-
-class FakeMessages:
-    """The ``messages`` resource double: records the request, then answers or raises."""
-
-    def __init__(self, answer=None, *, error=None):
-        self.answer = answer
-        self.error = error
-        self.calls = []
-
-    def create(self, **kwargs):
-        self.calls.append(kwargs)
-        if self.error is not None:
-            raise self.error
-        return self.answer
-
-
-class FakeAnthropic:
-    """An ``anthropic.Anthropic`` double: only ``messages`` is used."""
-
-    def __init__(self, answer=None, *, error=None):
-        self.messages = FakeMessages(answer, error=error)
-
-
-def anthropic_client(answer=None, *, error=None):
-    """An Anthropic adapter over a fake SDK client."""
-    client = FakeAnthropic(answer, error=error)
-    return AnthropicClient("claude-3-5-haiku-20241022", "sk-test", client=client), client
-
-
-def _request():
-    return httpx.Request("POST", "https://api.anthropic.com/v1/messages")
-
-
-def _status_error(error_type, status):
-    return error_type(
-        "provider said no", response=httpx.Response(status, request=_request()), body=None
-    )
-
-
-# --- the OpenAI-compatible adapter of the local GB10 endpoints ------------------------
+# --- the OpenAI-compatible adapter ---------------------------------------------------
 
 
 def test_the_openai_adapter_satisfies_the_protocol():
@@ -203,7 +138,7 @@ def test_the_openai_adapter_sends_a_configured_key_as_bearer():
 
 
 def test_a_trailing_slash_on_the_base_url_does_not_double_the_separator():
-    """The GX10 addresses are written with and without the slash; both work."""
+    """The endpoints are written with and without the slash; both work."""
     client, session = local_client(
         FakeResponse(chat_answer(BARE_ANSWER)), base_url="http://192.168.178.87:8004/v1/"
     )
@@ -296,7 +231,7 @@ def test_a_timeout_is_retryable():
 
 
 def test_a_connection_error_is_retryable():
-    """An unreachable GX10 may come back within the retry window."""
+    """An unreachable endpoint may come back within the retry window."""
     client, _session = local_client(error=requests.ConnectionError("connection refused"))
 
     with pytest.raises(RetryableModelError):
@@ -349,111 +284,166 @@ def test_a_fenced_answer_from_the_adapter_is_parsed():
     assert analysis.key_topics == ("hiring", "expansion")
 
 
-# --- the Anthropic adapter -----------------------------------------------------------
+# --- the fallback client -------------------------------------------------------------
 
 
-def test_the_anthropic_adapter_satisfies_the_protocol():
-    """Same seam, different provider."""
-    client, _client = anthropic_client()
+class FakeClient:
+    """An ``LLMClient`` double: answers from a list and records every prompt."""
+
+    def __init__(self, *answers):
+        self.answers = list(answers)
+        self.prompts = []
+
+    def complete(self, prompt):
+        self.prompts.append(prompt)
+        answer = self.answers.pop(0)
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+
+def test_the_fallback_satisfies_the_protocol():
+    """It has ``complete``, so it can stand where any other client stands."""
+    client = FallbackClient(FakeClient("answer"), FakeClient("answer"))
 
     assert isinstance(client, LLMClient)
 
 
-def test_the_anthropic_adapter_keeps_the_prefill():
-    """The legacy assistant turn stays, and a bare answer gets the prefill back."""
-    client, sdk = anthropic_client(FakeAnthropicAnswer(PREFILL_ANSWER))
+def test_a_retryable_primary_failure_is_answered_by_the_fallback():
+    """One retryable failure of the primary is the fallback's cue, not the caller's."""
+    primary = FakeClient(RetryableModelError("primary is overloaded"))
+    secondary = FakeClient("the fallback answer")
+    client = FallbackClient(primary, secondary)
 
-    assert client.complete("a prompt") == "sentiment:" + PREFILL_ANSWER
+    assert client.complete("a prompt") == "the fallback answer"
 
-    call = sdk.messages.calls[0]
-    assert call["model"] == "claude-3-5-haiku-20241022"
-    assert call["messages"][0] == {"role": "user", "content": "a prompt"}
-    assert call["messages"][1] == {"role": "assistant", "content": "sentiment:"}
-
-
-def test_the_anthropic_adapter_returns_a_json_answer_unchanged():
-    """An answer that ignored the prefill is passed on as it came."""
-    client, _sdk = anthropic_client(FakeAnthropicAnswer(BARE_ANSWER))
-
-    assert client.complete("a prompt") == BARE_ANSWER
+    assert primary.prompts == ["a prompt"]
+    assert secondary.prompts == ["a prompt"]
 
 
-def test_the_anthropic_adapter_returns_a_fenced_answer_unchanged():
-    """The fenced shape is the one issue #52 measured; the parser strips it."""
-    client, _sdk = anthropic_client(FakeAnthropicAnswer(FENCED_ANSWER))
+def test_a_terminal_primary_failure_never_reaches_the_fallback():
+    """A rejected request would be rejected again; asking the fallback hides nothing."""
+    error = ModelError("primary rejected the request")
+    primary = FakeClient(error)
+    secondary = FakeClient("the fallback answer")
+    client = FallbackClient(primary, secondary)
+
+    with pytest.raises(ModelError) as raised:
+        client.complete("a prompt")
+
+    assert raised.value is error
+    assert secondary.prompts == []
+
+
+def test_two_retryable_failures_name_both_errors_primary_first():
+    """The raised message keeps both texts, and the cause is the fallback error."""
+    primary_error = RetryableModelError("primary timed out")
+    secondary_error = RetryableModelError("fallback is unreachable")
+    client = FallbackClient(FakeClient(primary_error), FakeClient(secondary_error))
+
+    with pytest.raises(RetryableModelError) as raised:
+        client.complete("a prompt")
+
+    assert str(raised.value) == "primary timed out; fallback: fallback is unreachable"
+    assert raised.value.__cause__ is secondary_error
+
+
+def test_the_fallback_is_asked_once_per_prompt():
+    """One prompt, one primary call, one fallback call — no retry loop of its own."""
+    primary = FakeClient(RetryableModelError("down"), RetryableModelError("down again"))
+    secondary = FakeClient("first answer", "second answer")
+    client = FallbackClient(primary, secondary)
+
+    assert client.complete("first prompt") == "first answer"
+    assert client.complete("second prompt") == "second answer"
+
+    assert primary.prompts == ["first prompt", "second prompt"]
+    assert secondary.prompts == ["first prompt", "second prompt"]
+
+
+def test_a_fallback_answer_is_returned_exactly_like_a_primary_one():
+    """The caller cannot see which endpoint answered."""
+    client = FallbackClient(FakeClient(RetryableModelError("down")), FakeClient(FENCED_ANSWER))
 
     assert client.complete("a prompt") == FENCED_ANSWER
-
-
-def test_an_empty_anthropic_answer_is_retryable():
-    """No content block is the same empty-answer case as ``content: null``."""
-    client, _sdk = anthropic_client(FakeAnthropicAnswer(None))
-
-    with pytest.raises(RetryableModelError):
-        client.complete("a prompt")
-
-
-def test_an_anthropic_answer_cut_by_max_tokens_is_retryable():
-    """``stop_reason: max_tokens`` is the Anthropic form of a spent budget."""
-    client, _sdk = anthropic_client(
-        FakeAnthropicAnswer('{"sentiment": "posi', stop_reason="max_tokens")
-    )
-
-    with pytest.raises(RetryableModelError):
-        client.complete("a prompt")
-
-
-@pytest.mark.parametrize(
-    "error",
-    [
-        _status_error(RateLimitError, 429),
-        _status_error(InternalServerError, 529),
-        APITimeoutError(request=_request()),
-        APIConnectionError(request=_request()),
-    ],
-    ids=["rate-limit", "overloaded", "timeout", "connection"],
-)
-def test_the_transient_anthropic_failures_are_retryable(error):
-    """The four legacy retryable errors still classify as retryable, now via the seam."""
-    client, _sdk = anthropic_client(error=error)
-
-    with pytest.raises(RetryableModelError):
-        client.complete("a prompt")
-
-
-def test_a_rejected_anthropic_request_is_terminal():
-    """A 400 would fail again with the same prompt."""
-    client, _sdk = anthropic_client(error=_status_error(BadRequestError, 400))
-
-    with pytest.raises(ModelError):
-        client.complete("a prompt")
-
-
-def test_every_anthropic_sdk_error_maps_onto_the_two_seam_errors():
-    """Whatever the SDK raises, the caller only ever sees the seam's types."""
-    client, _sdk = anthropic_client(error=_status_error(APIStatusError, 418))
-
-    with pytest.raises(ModelError):
-        client.complete("a prompt")
 
 
 # --- the factory ---------------------------------------------------------------------
 
 
-def test_the_default_settings_build_the_local_adapter():
-    """``LLM_PROVIDER`` defaults to ``local``, so the GX10 writing model answers."""
+def test_the_default_settings_build_the_openai_adapter():
+    """Without a fallback the factory returns exactly the primary adapter."""
     client = build_client(LOCAL_DEFAULTS)
 
     assert isinstance(client, OpenAICompatibleClient)
+    assert not isinstance(client, FallbackClient)
 
 
-def test_the_anthropic_provider_builds_the_anthropic_adapter():
-    """The provider switch decides which adapter the analyzer gets."""
-    client = build_client(
-        Settings(database_url=URL, anthropic_api_key="sk-test", llm_provider="anthropic")
+def test_a_configured_fallback_wraps_both_adapters():
+    """``LLM_FALLBACK`` switches the factory from one adapter to the pair."""
+    settings = from_env(
+        {
+            "DATABASE_URL": URL,
+            "LLM_FALLBACK": "http://fallback.internal:8000/v1",
+        }
     )
 
-    assert isinstance(client, AnthropicClient)
+    client = build_client(settings)
+
+    assert isinstance(client, FallbackClient)
+    assert isinstance(client.primary, OpenAICompatibleClient)
+    assert isinstance(client.secondary, OpenAICompatibleClient)
+    assert client.primary.base_url == settings.llm_base_url
+    assert client.secondary.base_url == "http://fallback.internal:8000/v1"
+
+
+def test_the_fallback_model_defaults_to_the_primary_model():
+    """The factory reads the resolved model; ``from_env`` already defaulted it."""
+    settings = from_env(
+        {
+            "DATABASE_URL": URL,
+            "LLM_MODEL": "primary-model",
+            "LLM_FALLBACK": "http://fallback.internal:8000/v1",
+        }
+    )
+
+    client = build_client(settings)
+
+    assert client.secondary.model == "primary-model"
+
+
+def test_the_fallback_key_reaches_the_second_adapter():
+    """``LLM_FALLBACK_API_KEY`` is the second adapter's bearer token, no one else's."""
+    settings = from_env(
+        {
+            "DATABASE_URL": URL,
+            "LLM_API_KEY": "primary-key",
+            "LLM_FALLBACK": "http://fallback.internal:8000/v1",
+            "LLM_FALLBACK_API_KEY": "fallback-key",
+        }
+    )
+
+    client = build_client(settings)
+
+    assert client.primary._headers()["Authorization"] == "Bearer primary-key"
+    assert client.secondary._headers()["Authorization"] == "Bearer fallback-key"
+
+
+def test_both_adapters_share_the_timeout_and_the_budget():
+    """One call budget for the pair: the fallback is not a second configuration."""
+    settings = from_env(
+        {
+            "DATABASE_URL": URL,
+            "LLM_TIMEOUT": "12.5",
+            "LLM_MAX_TOKENS": "2048",
+            "LLM_FALLBACK": "http://fallback.internal:8000/v1",
+        }
+    )
+
+    client = build_client(settings)
+
+    assert (client.primary._timeout, client.primary._max_tokens) == (12.5, 2048)
+    assert (client.secondary._timeout, client.secondary._max_tokens) == (12.5, 2048)
 
 
 # --- the analyzer over the adapters --------------------------------------------------
