@@ -1,21 +1,18 @@
-import { ChangeDetectionStrategy, Component } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
+
+import { PostsStore } from './posts.store';
 
 /**
- * Placeholder for `/posts` - *What did it find?*
+ * The posts screen `/posts` - *What did it find?*
  *
- * The real screen (paged posts joined with their analysis, filters by asset and source) arrives
- * with #58; this component only proves the route, the shell and the layout.
+ * One row per post with its analysis, the two filters and the pager. The store owns the window,
+ * the filters and the request; the component only reads its signals (#58).
  */
 @Component({
   selector: 'app-posts',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  template: `
-    <section class="screen">
-      <h1>Posts</h1>
-      <p class="hint">
-        What did it find? Paged posts with their analysis and the filters arrive with #58.
-      </p>
-    </section>
-  `,
+  templateUrl: './posts.html',
 })
-export class Posts {}
+export class Posts {
+  protected readonly store = inject(PostsStore);
+}

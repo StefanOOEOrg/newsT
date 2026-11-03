@@ -1,22 +1,18 @@
-import { ChangeDetectionStrategy, Component } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
+
+import { SourcesStore } from './sources.store';
 
 /**
- * Placeholder for `/sources` - *Which sources are healthy?*
+ * The sources screen `/sources` - *Which sources are healthy?*
  *
- * The real screen (per collector: calls today, failures, last run, quota remaining) arrives with
- * #58; this component only proves the route, the shell and the layout.
+ * Per collector: calls today, failures, the last run and the quota remaining, with three counters
+ * above the table. The store owns the state (#58).
  */
 @Component({
   selector: 'app-sources',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  template: `
-    <section class="screen">
-      <h1>Sources</h1>
-      <p class="hint">
-        Which sources are healthy? Calls, failures, the last run and the quota remaining arrive with
-        #58.
-      </p>
-    </section>
-  `,
+  templateUrl: './sources.html',
 })
-export class Sources {}
+export class Sources {
+  protected readonly store = inject(SourcesStore);
+}

@@ -1,0 +1,79 @@
+<section class="screen">
+  <h1>Alerts</h1>
+  <p class="hint">What fired? Alerts with their 7-day return and whether they were right.</p>
+
+  <div class="toolbar">
+    <label>
+      Severity
+      <select #severity (change)="store.setSeverity(severity.value)">
+        <option value="">Any severity</option>
+        @for (option of severities; track option) {
+          <option [value]="option">{{ option }}</option>
+        }
+      </select>
+    </label>
+    <button type="button" (click)="store.reload()" [disabled]="store.loading()">Refresh</button>
+    <span class="hint">{{ store.total() }} alerts</span>
+  </div>
+
+  @if (store.error(); as failure) {
+    <p class="error" data-testid="error">
+      Could not load the alerts (HTTP {{ failure.status }}). {{ failure.message }}
+    </p>
+  } @else if (store.empty()) {
+    @if (store.filtered()) {
+      <p class="empty" data-testid="empty">
+        No alerts of this severity — choose “Any severity” to see all of them.
+      </p>
+    } @else {
+      <p class="empty" data-testid="empty">
+        No alerts yet — run <code>newstrading analyze</code> and <code>newstrading alerts</code>.
+      </p>
+    }
+  } @else if (store.rows().length === 0) {
+    <p class="hint" data-testid="loading">Loading the alerts…</p>
+  } @else {
+    <div class="panel">
+      <table class="data">
+        <thead>
+          <tr>
+            <th class="num">Id</th>
+            <th>Asset</th>
+            <th>Type</th>
+            <th>Severity</th>
+            <th>Description</th>
+            <th class="num">Confidence</th>
+            <th>Timestamp</th>
+            <th>Notified</th>
+            <th class="num">7d return</th>
+            <th>Correct 7d</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (row of store.rows(); track row.id) {
+            <tr>
+              <td class="num">{{ row.id }}</td>
+              <td>{{ row.asset }}</td>
+              <td>{{ row.alertType }}</td>
+              <td>{{ row.severity }}</td>
+              <td class="wrap">{{ row.description }}</td>
+              <td class="num">{{ row.confidence }}</td>
+              <td>{{ row.timestamp }}</td>
+              <td>{{ row.notified }}</td>
+              <td class="num">{{ row.return7d }}</td>
+              <td>{{ row.correct7d }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+
+    <div class="pager">
+      <button type="button" (click)="store.previous()" [disabled]="!store.hasPrevious()">
+        Previous
+      </button>
+      <span>page {{ store.page() }} / {{ store.pages() }}</span>
+      <button type="button" (click)="store.next()" [disabled]="!store.hasNext()">Next</button>
+    </div>
+  }
+</section>

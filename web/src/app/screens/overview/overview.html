@@ -1,0 +1,32 @@
+<section class="screen">
+  <h1>Overview</h1>
+  <p class="hint">Is it running? The counters, the last collector run and the database size.</p>
+
+  <div class="toolbar">
+    <button type="button" (click)="store.reload()" [disabled]="store.loading()">Refresh</button>
+    @if (store.loading()) {
+      <span class="hint">Loading…</span>
+    }
+  </div>
+
+  @if (store.error(); as failure) {
+    <p class="error" data-testid="error">
+      Could not load the overview (HTTP {{ failure.status }}). {{ failure.message }}
+    </p>
+  } @else if (store.empty()) {
+    <p class="empty" data-testid="empty">
+      The database is empty — run <code>newstrading init-db</code>, then a collector.
+    </p>
+  } @else if (store.data() === null) {
+    <p class="hint" data-testid="loading">Loading the overview…</p>
+  } @else {
+    <div class="cards">
+      @for (card of store.cards(); track card.key) {
+        <div class="card">
+          <div class="card-label">{{ card.label }}</div>
+          <div class="card-value">{{ card.value }}</div>
+        </div>
+      }
+    </div>
+  }
+</section>

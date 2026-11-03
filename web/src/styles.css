@@ -111,3 +111,157 @@ textarea:focus {
   scrollbar-width: thin;
   scrollbar-color: var(--line) transparent;
 }
+
+/*
+ * Shared table and card classes of the six screens (#58). Screens compose only these; a screen
+ * never carries a colour of its own - every value comes from the tokens above.
+ */
+
+/* Toolbar above a table: filters, the refresh button, the row count. */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0 10px;
+}
+
+.toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+
+/* A counter row: the overview cards, the source counters, the performance cards. */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 10px;
+  margin: 0 0 18px;
+}
+
+.card {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.card-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.card-value {
+  margin-top: 4px;
+  font-size: 20px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A table panel: one border around the table, the rows separated by --line. */
+.panel {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+table.data {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.data th {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.data td {
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.data tr:last-child td {
+  border-bottom: 0;
+}
+
+.data .num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.data .wrap {
+  max-width: 420px;
+  overflow-wrap: anywhere;
+}
+
+/* The two honest answers of a screen: an empty database, or a call that failed. */
+.empty,
+.error {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.empty {
+  color: var(--muted);
+}
+
+.error {
+  border-color: var(--err);
+  color: var(--err);
+}
+
+/* A log level, painted in the token of its tone. */
+.pill {
+  display: inline-block;
+  padding: 1px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.pill.err {
+  border-color: var(--err);
+  color: var(--err);
+}
+
+.pill.warn {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.pill.ok {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.pill.muted {
+  color: var(--muted);
+}
+
+/* Pager of the three paged screens. */
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  color: var(--muted);
+}
