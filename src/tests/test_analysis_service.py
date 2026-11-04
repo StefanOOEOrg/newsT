@@ -2,9 +2,10 @@
 
 The analyzer sits between ``social_posts`` and the model, so every case here drives a
 fake connection, a fake completion and a fake prompt builder: no database, no socket,
-no model. The expected values are the legacy ones — the select, the retry delays
-``2, 4`` between the three attempts and the neutral fallback for an empty answer come
-from ``analyzer/main.py``; the parsing comes from :mod:`newstrading.analysis.parser`.
+no model. The expected values are the legacy ones — the select and the retry delays
+``2, 4`` between the three attempts come from ``analyzer/main.py``; the parsing comes
+from :mod:`newstrading.analysis.parser`. An empty answer is a retryable failure: it is
+never turned into a row the model did not produce.
 """
 
 from datetime import datetime
@@ -31,8 +32,6 @@ ANSWER = """{
   "summary": "Tesla is hiring 2,000 engineers.",
   "special_events": ["partnership"]
 }"""
-
-NEUTRAL_SUMMARY = "Content could not be analyzed due to API content filters."
 
 
 def post_row(
@@ -270,25 +269,47 @@ def test_the_default_builder_loads_the_template_once_per_run_and_cuts_the_conten
 # --- the empty answer ---------------------------------------------------------------
 
 
-@pytest.mark.parametrize("answer", ["", "   \n"])
-def test_an_empty_answer_stores_the_neutral_analysis(answer):
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("   \n", id="whitespace"),
+        pytest.param(None, id="none"),
+    ],
+)
+def test_an_empty_answer_is_retried_three_times_and_stores_nothing(answer):
     connection = FakeConnection([post_row()])
-    analyzer = make_analyzer(connection, FakeModel(answer))
+    callback = FakeCallback()
+    model = FakeModel(answer, answer, answer)
+    sleep = FakeSleep()
+    analyzer = make_analyzer(connection, model, sleep=sleep, on_analysis=callback)
+
+    stored = analyzer.analyze_pending()
+
+    assert stored == 0
+    assert len(model.prompts) == 3
+    assert sleep.calls == [2, 4]
+    assert connection.inserted == []
+    assert callback.calls == []
+
+
+def test_two_retryable_errors_then_an_answer_store_exactly_one_row():
+    connection = FakeConnection([post_row()])
+    callback = FakeCallback()
+    model = FakeModel(
+        RetryableModelError("rate limited"), RetryableModelError("overloaded"), ANSWER
+    )
+    sleep = FakeSleep()
+    analyzer = make_analyzer(connection, model, sleep=sleep, on_analysis=callback)
 
     stored = analyzer.analyze_pending()
 
     assert stored == 1
-    assert connection.inserted == [
-        (
-            1,
-            "neutral",
-            0.0,
-            "Other",
-            ("Content moderation filtered",),
-            NEUTRAL_SUMMARY,
-            (),
-        )
-    ]
+    assert len(model.prompts) == 3
+    assert sleep.calls == [2, 4]
+    assert len(connection.inserted) == 1
+    assert connection.inserted[0][1] == "positive"
+    assert len(callback.calls) == 1
 
 
 # --- retries ------------------------------------------------------------------------
