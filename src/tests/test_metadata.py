@@ -7,6 +7,7 @@ is in the table. The test compares both sets instead of trusting the prose.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -17,6 +18,9 @@ ROOT = Path(__file__).resolve().parents[2]
 README = ROOT / "README.md"
 ENV_EXAMPLE = ROOT / ".env.example"
 VERSION = ROOT / "VERSION"
+CHANGELOG = ROOT / "CHANGELOG.md"
+WEB_VERSION = ROOT / "web" / "src" / "app" / "version.ts"
+WEB_PACKAGE = ROOT / "web" / "package.json"
 PYPROJECT = ROOT / "pyproject.toml"
 DOCS = ROOT / "docs"
 
@@ -48,6 +52,10 @@ LEGACY_PATHS = (
 )
 
 _TABLE_ROW = re.compile(r"^\|\s*`([A-Z][A-Z0-9_]*)`", re.MULTILINE)
+# The newest release of the changelog: `## [1.1.0] - 2026-11-04`.
+_RELEASE_HEADING = re.compile(r"^##\s+\[(\d+\.\d+\.\d+)\]", re.MULTILINE)
+# The version the footer renders: `export const APP_VERSION = "1.1.0";`.
+_APP_VERSION = re.compile(r"""APP_VERSION\s*=\s*['"]([^'"]+)['"]""")
 _DOCSTRING_VARIABLE = re.compile(r"\(``([A-Z][A-Z0-9_]*)``\)")
 # A line of the example, active or commented out: `NAME=value` or `# NAME=value`.
 _ENV_ASSIGNMENT = re.compile(r"^\s*#?\s*([A-Z][A-Z0-9_]*)=", re.MULTILINE)
@@ -78,12 +86,30 @@ def _env_example_paths() -> list[str]:
     return _PATH.findall(text)
 
 
+def _version() -> str:
+    """Return the release number the ``VERSION`` file holds."""
+    return VERSION.read_text(encoding="utf-8").strip()
+
+
 def test_version_file_holds_the_release_number() -> None:
-    assert VERSION.read_text(encoding="utf-8").strip() == "1.0.0"
+    headings = _RELEASE_HEADING.findall(CHANGELOG.read_text(encoding="utf-8"))
+    assert headings, "the changelog must name the releases"
+    assert _version() == headings[0]
 
 
 def test_package_version_is_the_version_file() -> None:
-    assert newstrading.__version__ == VERSION.read_text(encoding="utf-8").strip()
+    assert newstrading.__version__ == _version()
+
+
+def test_web_footer_shows_the_version_file() -> None:
+    match = _APP_VERSION.search(WEB_VERSION.read_text(encoding="utf-8"))
+    assert match, "version.ts must export APP_VERSION"
+    assert match.group(1) == _version()
+
+
+def test_web_package_version_is_the_version_file() -> None:
+    package = json.loads(WEB_PACKAGE.read_text(encoding="utf-8"))
+    assert package["version"] == _version()
 
 
 def test_pyproject_keeps_no_second_version() -> None:

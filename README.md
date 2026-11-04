@@ -168,8 +168,8 @@ The six screens, in the order of the questions they answer:
   source.
 - **Alerts** (`/alerts`) — *What fired?* the alerts with severity, confidence, the 7-day return and
   whether they were right.
-- **Performance** (`/performance`) — *Was it right?* the hit rate of the alerts that already have a
-  7-day verdict.
+- **Performance** (`/performance`) — *Was it right?* the hit rate per alert type across the 1d, 3d and
+  7d horizons, read from `/api/performance`.
 - **Sources** (`/sources`) — *Which sources are healthy?* calls, failures and the remaining quota
   per collector.
 - **Logs** (`/logs`) — *What went wrong?* `system_logs`, newest first.
